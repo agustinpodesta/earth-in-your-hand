@@ -1,220 +1,2998 @@
 <!DOCTYPE html>
-<html lang="az">
+<html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>earth is in your hand by n07eo</title>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <style>
-        body {
-            margin: 0;
-            overflow: hidden;
-            background-color: #000;
-            cursor: none;
-        }
-        #video-container {
-            position: relative;
-            width: 100vw;
-            height: 100vh;
-        }
-        video {
-            position: absolute;
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            transform: scaleX(-1);
-        }
-        canvas#three-canvas {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            pointer-events: none;
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Earth in Your Hand · Live Weather</title>
+<!-- Based on "Earth in Your Hand" by n07eo (Hamaidia Abd el wadoud): https://github.com/n07eo/Earth-in-Your-Hand -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3-array@3.2.4/dist/d3-array.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3-geo@3.1.1/dist/d3-geo.min.js"></script>
+<style>
+  :root {
+    --panel: rgba(12, 17, 26, 0.80);
+    --panel-solid: #0f1520;
+    --line: rgba(255, 255, 255, 0.12);
+    --text: #eef2f7;
+    --muted: #97a3b6;
+    --accent: #5ab0ff;
+    --live: #ff4d4d;
+    --green: #35c46a;
+    --orange: #ff9a2e;
+    --red: #ff3b3b;
+    --warn: #ffb36b;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    margin: 0;
+    overflow: hidden;
+    background: #000;
+    color: var(--text);
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); }
+  #stage {
+    position: fixed; inset: 0;
+    cursor: grab; touch-action: none;
+    background: radial-gradient(ellipse at 50% 45%, #0e1b30 0%, #04070d 60%, #000 100%);
+  }
+  #stage.dragging { cursor: grabbing; }
+  #stage.moving { cursor: move; }
+  video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+  canvas#three-canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  #labels, #cursors { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+
+  /* ---------- Map labels (Zoom Earth style) ---------- */
+  .place {
+    position: absolute; left: 0; top: 0; display: none; white-space: nowrap;
+    transform-origin: 0 0; color: #fff; pointer-events: none;
+    text-shadow: 0 1px 2px rgba(0,0,0,.95);
+    will-change: transform;         /* move on the compositor instead of repainting text every frame */
+  }
+  .place span { display: inline-block; transform: translate(-50%, -50%); }
+  .place.continent span { font-weight: 800; font-size: 13px; letter-spacing: .14em; }
+  .place.country span { font-weight: 600; font-size: 11.5px; letter-spacing: .02em; }
+  .place.ocean span { font-style: italic; font-size: 11.5px; letter-spacing: .12em; color: rgba(200,225,255,.75); }
+  .place.province span { font-weight: 600; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: rgba(255,255,255,.72); }
+  .place.city span { transform: translate(-4px, -50%); font-size: 11.5px; font-weight: 500; }
+  .place.city span::before {
+    content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 5px; vertical-align: 1px;
+    border-radius: 50%; background: #fff; box-shadow: 0 0 0 1.5px rgba(0,0,0,.7);
+  }
+  .place.city.big span { font-weight: 650; font-size: 12.5px; }
+
+  .ev-label {
+    position: absolute; left: 0; top: 0; display: none;
+    pointer-events: auto; cursor: pointer; white-space: nowrap;
+    margin: -11px 0 0 16px; padding: 2px 8px 2px 6px; border-radius: 6px;
+    background: rgba(12, 17, 26, 0.86); border: 1px solid var(--line);
+    font-size: 12px; font-weight: 600;
+    will-change: transform;
+  }
+  .ev-label:hover, .ev-label.active { border-color: var(--accent); }
+  .ev-label .sw { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .ev-label .k { color: var(--muted); font-weight: 500; margin-left: 5px; font-variant-numeric: tabular-nums; }
+  .ev-label.minor { font-size: 11px; font-weight: 500; padding: 1px 6px; }
+
+  #probe {
+    position: absolute; left: 0; top: 0; display: none; pointer-events: none;
+    transform-origin: 0 0;
+  }
+  #probe .card {
+    transform: translate(-50%, calc(-100% - 14px));
+    background: rgba(12, 17, 26, 0.92); border: 1px solid var(--line); border-radius: 10px;
+    padding: 7px 11px; white-space: nowrap; font-size: 13px; box-shadow: 0 6px 20px rgba(0,0,0,.35);
+  }
+  #probe .card::after {
+    content: ""; position: absolute; left: 50%; bottom: -6px; width: 10px; height: 10px;
+    background: rgba(12, 17, 26, 0.92); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line);
+    transform: translateX(-50%) rotate(45deg);
+  }
+  #probe .place-name { color: var(--muted); font-size: 11.5px; display: block; }
+  #probe .dot { position: absolute; left: -4px; top: -4px; width: 8px; height: 8px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 2px rgba(0,0,0,.5); }
+
+  /* ---------- Hand cursors ---------- */
+  .hand-cursor {
+    position: absolute; left: 0; top: 0; width: 34px; height: 34px; margin: -17px 0 0 -17px;
+    border-radius: 50%; border: 2px solid rgba(255,255,255,.9);
+    box-shadow: 0 0 0 2px rgba(0,0,0,.35); transition: background .12s, border-color .12s, transform .12s;
+    --p: 0;
+  }
+  .hand-cursor::after {
+    content: ""; position: absolute; inset: -6px; border-radius: 50%;
+    background: conic-gradient(var(--accent) calc(var(--p) * 1turn), transparent 0);
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px));
+            mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px));
+  }
+  .hand-cursor.pinch { background: rgba(90,176,255,.45); border-color: var(--accent); transform: scale(.75); }
+  .hand-cursor.fist { background: rgba(255,77,77,.35); border-color: var(--live); transform: scale(.85); }
+  .hand-cursor .tag {
+    position: absolute; top: 38px; left: 50%; transform: translateX(-50%);
+    font-size: 11px; font-weight: 600; white-space: nowrap; color: #fff;
+    background: rgba(12,17,26,.8); padding: 1px 6px; border-radius: 5px;
+  }
+
+  /* ---------- Panels ---------- */
+  .panel {
+    background: var(--panel);
+    -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+    border: 1px solid var(--line); border-radius: 14px;
+  }
+  #hud {
+    position: fixed; top: 16px; left: 16px; width: 316px;
+    max-width: calc(100vw - 32px); max-height: calc(100vh - 32px);
+    overflow: auto; padding: 14px 14px 12px; z-index: 3;
+  }
+  #hud header, #detail header { display: flex; align-items: center; gap: 8px; }
+  #hud h1 { font-size: 15px; font-weight: 650; margin: 0; flex: 1; }
+  .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--live); animation: pulse 2s infinite; flex: none; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(255,77,77,.55);} 70% { box-shadow: 0 0 0 9px rgba(255,77,77,0);} 100% { box-shadow: 0 0 0 0 rgba(255,77,77,0);} }
+  .icon-btn {
+    background: transparent; border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; height: 28px; min-width: 28px; padding: 0 8px; cursor: pointer; font: inherit; font-size: 12px;
+  }
+  .icon-btn:hover { background: rgba(255,255,255,.08); }
+  a.icon-btn { display: inline-flex; align-items: center; text-decoration: none; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #hud.collapsed .body { display: none; }
+  .section { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .section-title { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 6px; display: flex; justify-content: space-between; }
+
+  .toggle { display: flex; align-items: center; gap: 10px; padding: 4px 0; cursor: pointer; user-select: none; }
+  .toggle input { position: absolute; opacity: 0; pointer-events: none; }
+  .toggle .track { width: 30px; height: 18px; border-radius: 9px; background: rgba(255,255,255,.18); position: relative; flex: none; transition: background .15s; }
+  .toggle .track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: transform .15s; }
+  .toggle input:checked + .track { background: var(--accent); }
+  .toggle input:checked + .track::after { transform: translateX(12px); }
+  .toggle input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .toggle .txt { flex: 1; min-width: 0; }
+  .toggle .status { display: block; color: var(--muted); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .toggle .status.err { color: var(--warn); }
+
+  .pos-row { display: flex; align-items: center; gap: 10px; padding: 6px 0 2px; }
+  .pos-row .lbl { flex: 1; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button {
+    background: transparent; border: 0; color: var(--muted); font: inherit; font-size: 12px;
+    height: 26px; padding: 0 10px; cursor: pointer;
+  }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button:hover { color: var(--text); background: rgba(255,255,255,.06); }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: #07101c; font-weight: 600; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border-radius: 13px;
+    border: 1px solid var(--line); background: rgba(255,255,255,.05); color: var(--text); font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .chip[aria-pressed="false"] { opacity: .45; }
+  .chip .n { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  .ev-list { display: flex; flex-direction: column; gap: 4px; }
+  .ev-row {
+    display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 8px;
+    width: 100%; text-align: left; background: rgba(255,255,255,.04); border: 1px solid transparent;
+    color: var(--text); border-radius: 9px; padding: 6px 8px; cursor: pointer; font: inherit;
+  }
+  .ev-row:hover { background: rgba(255,255,255,.09); }
+  .ev-row.active { border-color: var(--accent); }
+  .badge { width: 28px; height: 22px; border-radius: 6px; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #0a0f18; }
+  .badge.icon { background: rgba(255,255,255,.08); font-size: 14px; box-shadow: inset 0 0 0 2px var(--c, #fff); }
+  .ev-row .t { min-width: 0; }
+  .ev-row .t b { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ev-row .t span { color: var(--muted); font-size: 11.5px; }
+  .ev-row .w { font-variant-numeric: tabular-nums; font-weight: 600; text-align: right; white-space: nowrap; }
+  .ev-row .w small { display: block; color: var(--muted); font-weight: 400; font-size: 11px; }
+  .empty { color: var(--muted); padding: 4px 0; }
+  .note { color: var(--muted); font-size: 11.5px; margin: 6px 0 0; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--muted); }
+  .legend i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .rain-scale { height: 8px; border-radius: 4px; margin: 4px 0 2px;
+    background: linear-gradient(90deg, rgb(110,190,255), rgb(40,110,245), rgb(95,60,220), rgb(175,50,200), rgb(245,60,150)); }
+  .rain-scale-labels { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
+
+  details.gestures summary { cursor: pointer; list-style: none; }
+  details.gestures summary::-webkit-details-marker { display: none; }
+  details.gestures summary::after { content: "Show"; float: right; color: var(--accent); text-transform: none; letter-spacing: 0; }
+  details.gestures[open] summary::after { content: "Hide"; }
+  .gesture-list { list-style: none; padding: 0; margin: 4px 0 0; display: grid; gap: 6px; }
+  .gesture-list li { display: grid; grid-template-columns: 30px 1fr; gap: 8px; align-items: start; }
+  .gesture-list .g { font-size: 18px; line-height: 1.1; text-align: center; }
+  .gesture-list b { font-weight: 600; }
+  .gesture-list span { color: var(--muted); display: block; font-size: 11.5px; }
+
+  .credits { color: var(--muted); font-size: 11px; margin-top: 10px; }
+  .credits a { color: var(--muted); }
+
+  /* ---------- Detail card ---------- */
+  #detail {
+    position: fixed; top: 16px; right: 16px; width: 360px; max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 32px); overflow: auto; padding: 14px; z-index: 4;
+    background: rgba(12, 17, 26, 0.9);
+  }
+  #detail h2 { font-size: 17px; margin: 0; line-height: 1.25; }
+  #detail .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  #detail .head-txt { flex: 1; min-width: 0; }
+  .big-badge { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; font-weight: 800; font-size: 15px; color: #0a0f18; flex: none; }
+  .big-badge.icon { font-size: 22px; background: rgba(255,255,255,.08); box-shadow: inset 0 0 0 2px var(--c, #fff); }
+  .alert-chip { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: 700; color: #0a0f18; margin-right: 6px; }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+  .stat { background: rgba(255,255,255,.05); border-radius: 9px; padding: 7px 9px; }
+  .stat .l { color: var(--muted); font-size: 11px; }
+  .stat .v { font-weight: 650; font-size: 14px; font-variant-numeric: tabular-nums; }
+  .stat .v small { font-weight: 400; color: var(--muted); font-size: 11.5px; }
+  #detail h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 14px 0 6px; }
+  #detail p { margin: 0 0 6px; }
+  .wiki { font-size: 13px; line-height: 1.5; }
+  .src { color: var(--muted); font-size: 11px; }
+  .news { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+  .news li { display: grid; grid-template-columns: 1fr 84px; gap: 10px; align-items: start; }
+  .news .nt { display: block; font-size: 13px; line-height: 1.35; font-weight: 550; color: var(--text); text-decoration: none; }
+  .news .nt:hover { text-decoration: underline; }
+  .news .nm { color: var(--muted); font-size: 11px; margin-top: 3px; }
+  .news .thumb {
+    position: relative; display: block; width: 84px; height: 58px; border-radius: 8px; overflow: hidden;
+    background: rgba(255,255,255,.07); box-shadow: inset 0 0 0 1px var(--line);
+  }
+  .news .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .news .thumb.loading::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(100deg, transparent 30%, rgba(255,255,255,.12) 50%, transparent 70%);
+    background-size: 200% 100%; animation: shimmer 1.2s linear infinite;
+  }
+  @keyframes shimmer { from { background-position: 150% 0; } to { background-position: -50% 0; } }
+  .news .fallback { display: grid; place-items: center; width: 100%; height: 100%; font-weight: 800; font-size: 15px; color: rgba(255,255,255,.92); }
+  .news .fallback img { width: 26px; height: 26px; object-fit: contain; border-radius: 5px; }
+  .wiki-thumb { float: right; width: 92px; height: 72px; object-fit: cover; border-radius: 8px; margin: 2px 0 6px 10px; box-shadow: inset 0 0 0 1px var(--line); }
+  .skeleton { color: var(--muted); font-style: italic; }
+
+  #hint {
+    position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
+    padding: 6px 14px; font-size: 12px; color: var(--muted); white-space: nowrap; z-index: 3; border-radius: 999px;
+    max-width: calc(100vw - 32px); overflow: hidden; text-overflow: ellipsis;
+  }
+  #hint b { color: var(--text); font-weight: 600; }
+
+  @media (max-width: 760px) {
+    #hud { top: 12px; left: 12px; right: 12px; width: auto; max-height: 48vh; }
+    #detail { top: auto; bottom: 12px; left: 12px; right: 12px; width: auto; max-height: 55vh; }
+    #hint { white-space: normal; text-align: center; border-radius: 12px; bottom: 10px; width: calc(100vw - 24px); }
+  }
+</style>
 </head>
 <body>
 
-<div id="video-container">
-    <video id="webcam" autoplay playsinline></video>
-    <canvas id="three-canvas"></canvas>
+<div id="stage">
+  <video id="webcam" autoplay playsinline muted></video>
+  <canvas id="three-canvas"></canvas>
+  <div id="labels"></div>
+  <div id="cursors"></div>
 </div>
 
+<aside id="hud" class="panel" aria-label="Live weather layers">
+  <header>
+    <span class="live-dot" aria-hidden="true"></span>
+    <h1>Earth · Live</h1>
+    <a class="icon-btn" href="/about" title="Who made this, and why">About</a>
+    <button class="icon-btn" id="refresh-btn" title="Refresh all data">Refresh</button>
+    <button class="icon-btn" id="collapse-btn" aria-expanded="true" title="Show or hide panel">–</button>
+  </header>
+
+  <div class="body">
+    <div class="section">
+      <p class="section-title">Layers</p>
+      <label class="toggle">
+        <input type="checkbox" id="t-clouds" checked><span class="track"></span>
+        <span class="txt">Clouds <span class="status" id="s-clouds">Loading…</span></span>
+      </label>
+      <label class="toggle">
+        <input type="checkbox" id="t-rain" checked><span class="track"></span>
+        <span class="txt">Rain &amp; snow <span class="status" id="s-rain">Loading…</span></span>
+      </label>
+      <label class="toggle">
+        <input type="checkbox" id="t-borders" checked><span class="track"></span>
+        <span class="txt">Borders &amp; labels <span class="status" id="s-borders">Loading…</span></span>
+      </label>
+      <div class="pos-row">
+        <span class="lbl">Globe position</span>
+        <span class="seg" role="group" aria-label="Globe position">
+          <button type="button" data-snap="left" aria-pressed="false">Left</button>
+          <button type="button" data-snap="center" aria-pressed="true">Center</button>
+          <button type="button" data-snap="right" aria-pressed="false">Right</button>
+        </span>
+      </div>
+    </div>
+
+    <div class="section">
+      <p class="section-title"><span>Disasters</span><span id="s-events">Loading…</span></p>
+      <div class="chips" id="type-chips"></div>
+    </div>
+
+    <div class="section">
+      <p class="section-title">Tropical cyclones</p>
+      <div class="ev-list" id="tc-list"><div class="empty">Loading…</div></div>
+      <p class="section-title" style="margin-top:12px">Other alerts</p>
+      <div class="ev-list" id="alert-list"><div class="empty">Loading…</div></div>
+    </div>
+
+    <div class="section">
+      <p class="section-title">Cyclone category</p>
+      <div class="legend" id="cat-legend"></div>
+      <p class="section-title" style="margin-top:10px">Rain rate</p>
+      <div class="rain-scale"></div>
+      <div class="rain-scale-labels"><span>Light</span><span>Moderate</span><span>Heavy</span><span>Extreme</span></div>
+    </div>
+
+    <div class="section">
+      <details class="gestures" id="gesture-help">
+        <summary class="section-title">Hand gestures</summary>
+        <ul class="gesture-list">
+          <li><span class="g">🤏</span><div><b>Pinch and move</b><span>Thumb and index together, then move your hand to rotate the globe. Let go to release.</span></div></li>
+          <li><span class="g">🤏🤏</span><div><b>Pinch with both hands</b><span>Pull your hands apart to zoom in, bring them together to zoom out.</span></div></li>
+          <li><span class="g">☝️</span><div><b>Point and hold</b><span>Hover the circle over a storm or alert for 1 second to open its details.</span></div></li>
+          <li><span class="g">✊</span><div><b>Fist</b><span>Stops any spin and closes the details card.</span></div></li>
+        </ul>
+        <p class="note">Tips: keep the other fingers open when you pinch, use even front lighting, and sit about an arm's length from the camera. Mouse also works: drag to rotate, Shift-drag or right-drag to move, scroll to zoom, click.</p>
+      </details>
+    </div>
+
+    <p class="credits">
+      Data: <a href="https://www.gdacs.org/" target="_blank" rel="noopener">GDACS</a> (UN/EC),
+      <a href="https://nasa-gibs.github.io/gibs-api-docs/" target="_blank" rel="noopener">NASA GIBS</a> (GOES, Himawari, NOAA-20, GPM IMERG, Blue Marble),
+      <a href="https://www.naturalearthdata.com/" target="_blank" rel="noopener">Natural Earth</a>,
+      <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>, Wikipedia.
+      Not an official warning source. Based on
+      <a href="https://github.com/n07eo/Earth-in-Your-Hand" target="_blank" rel="noopener">Earth in Your Hand</a> by n07eo.
+    </p>
+  </div>
+</aside>
+
+<aside id="detail" class="panel" hidden aria-live="polite" aria-label="Event details"></aside>
+
+<div id="hint" class="panel">Starting camera…</div>
+
 <script>
-    const videoElement = document.getElementById('webcam');
-    const canvasElement = document.getElementById('three-canvas');
-    
-    let scene, camera, renderer, globe;
-    let rotationVelocity = 0.002; 
-    let lastZ = null; 
-    const friction = 0.99; 
-    
-    let targetPos = { x: 0, y: 0 };
-    let targetScale = 1.0; 
-    const easing = 0.3; 
+(() => {
+  'use strict';
 
-    function initThree() {
-        scene = new THREE.Scene();
-        // Perspektivi bir az dəyişərək dünyanı daha yaxın hiss etdiririk
-        camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        
-        renderer = new THREE.WebGLRenderer({ canvas: canvasElement, alpha: true, antialias: true });
-        renderer.setSize(window.innerWidth, window.innerHeight);
+  // =====================================================================
+  // Config
+  // =====================================================================
+  const D = Math.PI / 180;
+  const R = 1.5;
+  const RADII = { clouds: R * 1.004, rain: R * 1.006, borders: R * 1.0075, cone: R * 1.010, track: R * 1.012, marker: R * 1.02, label: R * 1.01 };
+  // Each overlay floats above the surface by `lift` (fraction of R) when zoomed out, and sinks to `min`
+  // as you zoom in, so borders, clouds and markers stay registered with the ground at street-level zoom.
+  const LIFT = {
+    basePatch: [0.00015, 0.00015], clouds: [0.004, 0.0003], cloudPatch: [0.0042, 0.00032],
+    rain: [0.006, 0.00045], borders: [0.0075, 0.0006], cone: [0.010, 0.0007], track: [0.012, 0.0008],
+    marker: [0.02, 0.001], label: [0.01, 0.0006],
+  };
+  const BASE_CAM = 4.6;                // camera distance at zoom 1
+  const ZOOM_MIN = 0.55, ZOOM_MAX = 60;
+  const ADMIN1_LINES = 'data/admin1-lines.json';
+  const ADMIN1_LABELS = 'data/admin1-labels.json';
 
-        const ambientLight = new THREE.AmbientLight(0xffffff, 1.4);
-        scene.add(ambientLight);
-        
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
-        directionalLight.position.set(5, 3, 5);
-        scene.add(directionalLight);
+  const GIBS_WMS = 'https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?SERVICE=WMS&REQUEST=GetMap&VERSION=1.1.1&SRS=EPSG:4326';
+  const WORLD_BOX = { minLon: -180, minLat: -90, maxLon: 180, maxLat: 90 };
+  // Geostationary satellites and the longitude they sit over; each is weighted by viewing angle
+  // so the joins between them cross-fade instead of showing a hard seam.
+  const GEO_SATS = [
+    { layer: 'Himawari_AHI_Band13_Clean_Infrared',  lon: 140.7 },
+    { layer: 'GOES-West_ABI_Band13_Clean_Infrared', lon: -137.0 },
+    { layer: 'GOES-East_ABI_Band13_Clean_Infrared', lon: -75.2 },
+  ];
+  const FALLBACK_EARTH = 'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_atmos_2048.jpg';
+  const WORLD_ATLAS = 'https://cdn.jsdelivr.net/npm/world-atlas@2.0.2/countries-50m.json';
+  const GDACS = 'https://www.gdacs.org/gdacsapi/api';
 
-        const loader = new THREE.TextureLoader();
-        const geometry = new THREE.SphereGeometry(1.5, 64, 64);
-        
-        const material = new THREE.MeshPhongMaterial({
-            color: 0xffffff,
-            shininess: 20,
-            map: loader.load('https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_atmos_2048.jpg')
-        });
-        
-        globe = new THREE.Mesh(geometry, material);
-        scene.add(globe);
+  const REFRESH = { events: 10 * 60e3, clouds: 20 * 60e3, rain: 30 * 60e3 };
 
-        const cloudGeo = new THREE.SphereGeometry(1.515, 64, 64);
-        const cloudMat = new THREE.MeshPhongMaterial({
-            map: loader.load('https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_clouds_1024.png'),
-            transparent: true,
-            opacity: 0.4
-        });
-        const clouds = new THREE.Mesh(cloudGeo, cloudMat);
-        globe.add(clouds);
+  // Saffir–Simpson by sustained wind (kt). Saturated colours so they stand out against white cloud.
+  const CATS = [
+    { max: 33,       short: 'TD', name: 'Tropical depression', color: '#4da6ff' },
+    { max: 63,       short: 'TS', name: 'Tropical storm',      color: '#2fd3c8' },
+    { max: 82,       short: '1',  name: 'Category 1',          color: '#ffd84d' },
+    { max: 95,       short: '2',  name: 'Category 2',          color: '#ffa53d' },
+    { max: 112,      short: '3',  name: 'Category 3',          color: '#ff6b3d' },
+    { max: 136,      short: '4',  name: 'Category 4',          color: '#ff3d77' },
+    { max: Infinity, short: '5',  name: 'Category 5',          color: '#c44dff' },
+  ];
+  const CAT_UNKNOWN = { short: '?', name: 'Tropical cyclone', color: '#cfd8e3' };
+  const ALERT_COLORS = { Green: '#35c46a', Orange: '#ff9a2e', Red: '#ff3b3b' };
+  const TYPES = {
+    TC: { label: 'Cyclones',    icon: '🌀', on: true },
+    EQ: { label: 'Earthquakes', icon: '⦿',  on: true },
+    FL: { label: 'Floods',      icon: '🌊', on: true },
+    VO: { label: 'Volcanoes',   icon: '🌋', on: true },
+    WF: { label: 'Wildfires',   icon: '🔥', on: false },
+  };
 
-        // Kameranı dünyadan bir az daha yaxın yerləşdiririk (əvvəl 5 idi, indi 4)
-        camera.position.z = 4;
+  const CONTINENTS = [
+    ['NORTH AMERICA', 47, -100], ['SOUTH AMERICA', -14, -60], ['EUROPE', 52, 18], ['AFRICA', 6, 20],
+    ['ASIA', 50, 90], ['AUSTRALIA', -25, 134], ['ANTARCTICA', -80, 30],
+  ];
+  const OCEANS = [
+    ['PACIFIC OCEAN', 8, -145], ['PACIFIC OCEAN', 18, 165], ['ATLANTIC OCEAN', 22, -42], ['ATLANTIC OCEAN', -22, -18],
+    ['INDIAN OCEAN', -22, 78], ['ARCTIC OCEAN', 83, 10], ['SOUTHERN OCEAN', -60, 100],
+  ];
+
+  // =====================================================================
+  // DOM + state
+  // =====================================================================
+  const $ = (id) => document.getElementById(id);
+  const videoElement = $('webcam');
+  const canvasElement = $('three-canvas');
+  const stage = $('stage');
+  const labelsEl = $('labels');
+  const cursorsEl = $('cursors');
+  const hud = $('hud');
+  const detail = $('detail');
+  const hint = $('hint');
+
+  let scene, camera, renderer, globe, earthMesh, earthMat, cloudMesh, rainMesh, bordersGroup, eventsGroup, detailGroup, atmoMesh;
+  let rotationVelocity = 0;
+  let friction = 0.95;
+  let targetScale = 1.0;             // target zoom (1 = whole globe in view, up to ZOOM_MAX)
+  let zoomLevel = 1.0;               // current, eased zoom
+  let targetPos = { x: 0, y: 0 };    // globe centre on screen, in world units
+  let flyTarget = null;
+  let grabTarget = null;            // eased rotation target while a hand is grabbing
+  let userInteracted = false;
+
+  const layers = { clouds: true, rain: true, borders: true };
+  const state = {
+    events: [],
+    eventsUpdated: null,
+    activeKey: null,
+    placeTiers: { base: [], countries: [], provinces: [], cities: [] },
+    lines: {},                       // coast/border line sets by detail level
+    countries: null,                 // GeoJSON features for click lookup
+    probe: null,
+  };
+
+  // =====================================================================
+  // Helpers
+  // =====================================================================
+  const clamp = (v, a, b) => Math.min(Math.max(v, a), b);
+  const smooth = (e0, e1, x) => { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
+  const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+  const ymd = (offsetDays) => new Date(Date.now() + offsetDays * 864e5).toISOString().slice(0, 10);
+  const titleCase = (s) => s.toLowerCase().replace(/(^|[\s-])\w/g, (m) => m.toUpperCase());
+  const fmtInt = (n) => Math.round(n).toLocaleString('en-US');
+
+  function parseGdacsDate(s) {
+    if (!s) return null;
+    return new Date(/Z$|[+-]\d\d:?\d\d$/.test(s) ? s : s + 'Z');
+  }
+  function parseAdvisoryDate(s) {
+    const m = /(\d{1,2}) (\w{3}) (\d{4}) (\d{1,2}):(\d{2})/.exec(s || '');
+    if (!m) return null;
+    const mon = 'JanFebMarAprMayJunJulAugSepOctNovDec'.indexOf(m[2]) / 3;
+    return new Date(Date.UTC(+m[3], mon, +m[1], +m[4], +m[5]));
+  }
+  function ago(date) {
+    if (!date) return '';
+    const mins = Math.round((Date.now() - date.getTime()) / 60000);
+    if (mins < 0) {
+      const h = Math.round(-mins / 60);
+      return h < 48 ? `in ${h}h` : `in ${Math.round(h / 24)}d`;
     }
+    if (mins < 60) return `${mins}m ago`;
+    const h = Math.round(mins / 60);
+    if (h < 48) return `${h}h ago`;
+    return `${Math.round(h / 24)}d ago`;
+  }
+  function fmtUTC(d) {
+    if (!d) return '';
+    return d.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) + ' UTC';
+  }
+  function fmtDay(d) {
+    return d ? d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' }) : '';
+  }
+  function categoryFor(kts) {
+    if (kts == null || !isFinite(kts)) return CAT_UNKNOWN;
+    return CATS.find((c) => kts <= c.max);
+  }
+  function catLabel(cat) { return /^\d$/.test(cat.short) ? 'Cat ' + cat.short : cat.short; }
 
-    const hands = new Hands({
-        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+  function node(tag, cls, text) {
+    const el = document.createElement(tag);
+    if (cls) el.className = cls;
+    if (text != null) el.textContent = text;
+    return el;
+  }
+  function setStatus(key, text, isError) {
+    const el = $('s-' + key);
+    if (!el) return;
+    el.textContent = text;
+    el.title = text;
+    el.classList.toggle('err', !!isError);
+  }
+
+  async function getJSON(url, timeoutMs = 20000) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { signal: ctrl.signal });
+      if (res.status === 404 || res.status === 204) return null;
+      if (!res.ok) throw new Error(`${res.status} ${url}`);
+      const txt = await res.text();
+      return txt ? JSON.parse(txt) : null;
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  function loadImage(url) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Image failed: ' + url));
+      img.src = url;
     });
+  }
+  function gibsUrl(layer, w, h, format, time, box = WORLD_BOX) {
+    const bbox = [box.minLon, box.minLat, box.maxLon, box.maxLat].map((v) => +v.toFixed(4)).join(',');
+    let u = `${GIBS_WMS}&BBOX=${bbox}&LAYERS=${layer}&WIDTH=${w}&HEIGHT=${h}&FORMAT=${encodeURIComponent(format)}`;
+    if (format === 'image/png') u += '&TRANSPARENT=true';
+    if (time) u += `&TIME=${time}`;
+    return u;
+  }
+  function pixelsOf(img, w, h) {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0, w, h);
+    return ctx.getImageData(0, 0, w, h).data;
+  }
 
-    hands.setOptions({
-        maxNumHands: 2,
-        modelComplexity: 1,
-        minDetectionConfidence: 0.75,
-        minTrackingConfidence: 0.75
-    });
+  // Lat/lon -> point on a THREE.SphereGeometry (matches its UV mapping)
+  function latLonToVec(lat, lon, r) {
+    const phi = (90 - lat) * D, theta = (lon + 180) * D;
+    return new THREE.Vector3(-r * Math.sin(phi) * Math.cos(theta), r * Math.cos(phi), r * Math.sin(phi) * Math.sin(theta));
+  }
+  function vecToLatLon(v) {
+    const n = v.clone().normalize();
+    const lat = Math.asin(clamp(n.y, -1, 1)) / D;
+    let lon = Math.atan2(n.z, -n.x) / D - 180;
+    if (lon < -180) lon += 360;
+    return { lat, lon };
+  }
 
-    hands.onResults(onResults);
+  // =====================================================================
+  // Scene
+  // =====================================================================
+  function initThree() {
+    scene = new THREE.Scene();
+    camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.z = BASE_CAM;
 
-    function getDistance(p1, p2) {
-        return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
+    renderer = new THREE.WebGLRenderer({ canvas: canvasElement, alpha: true, antialias: true });
+    // 1.5× is visually close to 2× on Retina but draws ~44% fewer pixels per frame
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+
+    // Mostly flat light like a map, with a soft key light so the sphere still reads as 3D
+    scene.add(new THREE.AmbientLight(0xffffff, 0.82));
+    const key = new THREE.DirectionalLight(0xffffff, 0.42);
+    key.position.set(-2, 2, 5);
+    scene.add(key);
+
+    globe = new THREE.Group();
+    scene.add(globe);
+
+    earthMat = new THREE.MeshLambertMaterial({ color: 0x0d1d38 });   // deep ocean blue until the map arrives
+    // 256 segments keep the sphere's facets well below the layer gaps at deep zoom
+    earthMesh = new THREE.Mesh(new THREE.SphereGeometry(R, 256, 256), earthMat);
+    globe.add(earthMesh);
+
+    cloudMesh = new THREE.Mesh(
+      new THREE.SphereGeometry(RADII.clouds, 256, 256),
+      new THREE.MeshLambertMaterial({ transparent: true, depthWrite: false, opacity: 0.95 })
+    );
+    cloudMesh.visible = false;
+    globe.add(cloudMesh);
+    addLift(cloudMesh, LIFT.clouds);
+
+    rainMesh = new THREE.Mesh(
+      new THREE.SphereGeometry(RADII.rain, 256, 256),
+      new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false })
+    );
+    rainMesh.visible = false;
+    globe.add(rainMesh);
+    addLift(rainMesh, LIFT.rain);
+
+    // Sharper imagery for the area in view at deep zoom (see loadDetail)
+    detailGroup = new THREE.Group();
+    globe.add(detailGroup);
+
+    // Atmosphere rim
+    const atmo = atmoMesh = new THREE.Mesh(
+      new THREE.SphereGeometry(R * 1.07, 64, 64),
+      new THREE.ShaderMaterial({
+        uniforms: { glow: { value: new THREE.Color(0x4f9dff) }, fade: { value: 1 } },
+        // Uses the real view direction per pixel, so the rim stays even when the globe is off-centre
+        vertexShader: 'varying vec3 vN; varying vec3 vV; void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); vN = normalize(normalMatrix * normal); vV = -mv.xyz; gl_Position = projectionMatrix * mv; }',
+        // 0 at the atmosphere's outer edge, rising to full at the globe's limb (−n·v ≈ 0.36 there for a 1.07R shell)
+        fragmentShader: 'uniform vec3 glow; uniform float fade; varying vec3 vN; varying vec3 vV; void main(){ float d = clamp(-dot(normalize(vN), normalize(vV)) / 0.36, 0.0, 1.0); gl_FragColor = vec4(glow, 1.0) * pow(d, 2.4) * 0.85 * fade; }',
+        side: THREE.BackSide, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false,
+      })
+    );
+    globe.add(atmo);
+
+    bordersGroup = new THREE.Group();
+    globe.add(bordersGroup);
+    addLift(bordersGroup, LIFT.borders);
+    eventsGroup = new THREE.Group();
+    globe.add(eventsGroup);
+  }
+
+  // ---------- Layer lift (see LIFT) ----------
+  const liftables = [];
+  function addLift(obj, [lift, min]) { liftables.push({ obj, lift, min }); }
+  function liftRadius([lift, min], z) { return R * (1 + Math.max(min, lift / Math.max(1, z))); }
+  function updateLifts(z) {
+    for (let i = liftables.length - 1; i >= 0; i--) {
+      const l = liftables[i];
+      if (!l.obj.parent) { liftables.splice(i, 1); continue; }     // disposed
+      l.obj.scale.setScalar((1 + Math.max(l.min, l.lift / Math.max(1, z))) / (1 + l.lift));
     }
+  }
 
-    function isFingerFolded(landmarks, fingerTipIdx, fingerPipIdx) {
-        return landmarks[fingerTipIdx].y > landmarks[fingerPipIdx].y;
+  // ---------- Zoom: shrink the globe below 1×, fly the camera down toward the surface above 1× ----------
+  function applyZoom(z) {
+    zoomLevel = z;
+    const gs = Math.min(z, 1);
+    globe.scale.set(gs, gs, gs);
+    const height = (BASE_CAM - R) / Math.max(z, 1);            // camera height above the surface
+    const centre = smooth(1, 3, z);                              // deep zoom: look straight down at the globe
+    camera.position.set(globe.position.x * centre, globe.position.y * centre, globe.position.z + R + height);
+    const near = clamp(height * 0.2, 0.0005, 0.1);
+    if (Math.abs(camera.near - near) > near * 0.05) {
+      camera.near = near;
+      camera.far = R * 3 + BASE_CAM;
+      camera.updateProjectionMatrix();
     }
-
-    function isHandFist(landmarks) {
-        return isFingerFolded(landmarks, 8, 6) && 
-               isFingerFolded(landmarks, 12, 10) && 
-               isFingerFolded(landmarks, 16, 14) && 
-               isFingerFolded(landmarks, 20, 18);
+    if (atmoMesh) {
+      const a = 1 - smooth(4, 8, z);
+      atmoMesh.visible = a > 0.01;            // the camera ends up inside the shell at deep zoom
+      atmoMesh.material.uniforms.fade.value = a;
     }
+    updateLifts(z);
+  }
 
-    function onResults(results) {
-        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-            let rightHand = null; 
-            let leftHand = null;  
+  // =====================================================================
+  // Base map: NASA Blue Marble shaded relief + bathymetry
+  // =====================================================================
+  async function loadBaseMap() {
+    // 4K is enough for the whole-globe view; zoomed-in areas get their own sharper patch (loadDetail).
+    // An 8K texture took ~0.5 s to upload and blocked the page.
+    const w = 4096;
+    const apply = (img) => {
+      const tex = new THREE.Texture(img);
+      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      tex.needsUpdate = true;
+      earthMat.map = tex;
+      earthMat.color.set(0xffffff);
+      earthMat.needsUpdate = true;
+    };
+    try {
+      apply(await loadImage(gibsUrl('BlueMarble_ShadedRelief_Bathymetry', w, w / 2, 'image/jpeg')));
+    } catch (e) {
+      console.warn(e);
+      try { apply(await loadImage(FALLBACK_EARTH)); } catch (_) { /* leave plain sphere */ }
+    }
+  }
 
-            results.multiHandLandmarks.forEach((landmark, index) => {
-                const label = results.multiHandedness[index].label;
-                if (label === 'Left') rightHand = landmark; 
-                if (label === 'Right') leftHand = landmark;
-            });
+  // =====================================================================
+  // Clouds: live geostationary infrared (GOES-East/West, Himawari) as white,
+  // gap over Europe/Africa/Indian Ocean filled from yesterday's NOAA-20 VIIRS.
+  // =====================================================================
+  // ---------- Pure pixel functions ----------
+  // These run inside the background image worker (or here, as a fallback). They must stay
+  // self-contained: the worker receives their source text, not this scope.
 
-            // 1. Sağ Əl - İzləmə (Koordinatları barmaq uclarına daha yaxın etdik)
-            if (rightHand) {
-                const fingerTip = rightHand[8]; 
-                // Multiplier (vuran) dəyərlərini tənzimləyərək dünyanı barmaq ucuna daha sıx bağlayırıq
-                targetPos.x = ((1 - fingerTip.x) - 0.5) * 8; 
-                targetPos.y = -(fingerTip.y - 0.5) * 5 + 1.5; 
-
-                if (isHandFist(rightHand)) {
-                    rotationVelocity = 0;
-                }
-            }
-
-            // 2. Sol Əl - İrəli itələdikdə SOLA fırlanma və ZOOM
-            if (leftHand) {
-                const currentZ = leftHand[8].z; 
-                if (lastZ !== null) {
-                    const zDelta = currentZ - lastZ;
-                    if (zDelta < -0.002) { 
-                        rotationVelocity -= Math.abs(zDelta) * 5.0; 
-                    }
-                }
-                lastZ = currentZ;
-
-                const isMiddleFolded = isFingerFolded(leftHand, 12, 9);
-                const isRingFolded = isFingerFolded(leftHand, 16, 13);
-                const isPinkyFolded = isFingerFolded(leftHand, 20, 17);
-
-                if (isMiddleFolded && isRingFolded && isPinkyFolded) {
-                    const thumbTip = leftHand[4];
-                    const indexTip = leftHand[8];
-                    const distance = getDistance(thumbTip, indexTip);
-                    
-                    let newScale = distance * 8.0; 
-                    targetScale = Math.min(Math.max(newScale, 0.4), 2.8);
-                }
-            } else {
-                lastZ = null;
-            }
+  // Three geostationary IR images (+ a VIIRS gap-filler) → white clouds, shaded by cloud-top temperature
+  function cloudPixels(sats, v, box, W, H) {
+    const DEG = Math.PI / 180;
+    const sm = (e0, e1, x) => { const t = Math.min(Math.max((x - e0) / (e1 - e0), 0), 1); return t * t * (3 - 2 * t); };
+    const latAt = (y) => box.maxLat - (y + 0.5) * (box.maxLat - box.minLat) / H;
+    const lonAt = (x) => box.minLon + (x + 0.5) * (box.maxLon - box.minLon) / W;
+    const cosLat = new Float32Array(H);
+    for (let y = 0; y < H; y++) cosLat[y] = Math.cos(latAt(y) * DEG);
+    const prepared = sats.map(({ px, lon }) => {
+      // Rows of solid white are missing scan lines, not cloud
+      const badRow = new Uint8Array(H);
+      for (let y = 0; y < H; y++) {
+        let n = 0, white = 0;
+        for (let x = 0; x < W; x += 4) {
+          const i = (y * W + x) * 4;
+          if (px[i + 3] > 0) { n++; if (px[i] >= 250 && px[i + 1] >= 250 && px[i + 2] >= 250) white++; }
         }
-    }
-
-    const cameraInput = new Camera(videoElement, {
-        onFrame: async () => {
-            await hands.send({ image: videoElement });
-        },
-        width: 1280,
-        height: 720
+        if (n > 40 && white / n > 0.3) badRow[y] = 1;
+      }
+      const cosDl = new Float32Array(W);
+      for (let x = 0; x < W; x++) cosDl[x] = Math.cos((lonAt(x) - lon) * DEG);
+      return { px, badRow, cosDl };
     });
-
-    function animate() {
-        requestAnimationFrame(animate);
-        
-        globe.position.x += (targetPos.x - globe.position.x) * easing;
-        globe.position.y += (targetPos.y - globe.position.y) * easing;
-
-        globe.scale.x += (targetScale - globe.scale.x) * 0.1;
-        globe.scale.y += (targetScale - globe.scale.y) * 0.1;
-        globe.scale.z += (targetScale - globe.scale.z) * 0.1;
-
-        globe.rotation.y += rotationVelocity;
-        
-        if (Math.abs(rotationVelocity) > 0.0001) {
-            rotationVelocity *= friction;
+    const o = new Uint8ClampedArray(W * H * 4);
+    const cosFar = Math.cos(80 * DEG), cosNear = Math.cos(55 * DEG);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = (y * W + x) * 4;
+        let sumW = 0, sumA = 0, sumS = 0;
+        for (const s of prepared) {
+          if (s.badRow[y]) continue;
+          const g = s.px;
+          if (g[i + 3] < 200) continue;
+          // Weight each satellite by viewing angle so the joins between them cross-fade
+          const w = sm(cosFar, cosNear, cosLat[y] * s.cosDl[x]);
+          if (w <= 0) continue;
+          const r = g[i], gg = g[i + 1], b = g[i + 2];
+          const grey = Math.abs(r - gg) < 14 && Math.abs(gg - b) < 14;
+          // Grey ramp: brighter = colder (low/mid cloud). Colours: cold, high cloud tops.
+          const a = grey ? (r < 45 ? 0.95 : sm(145, 205, r) * 0.92) : 0.95;
+          const shade = grey ? (r < 45 ? 1 : sm(150, 235, r)) : 1;      // colder tops render whiter
+          sumW += w; sumA += w * a; sumS += w * shade;
         }
-
-        renderer.render(scene, camera);
+        let a = 0, shade = 1;
+        const cover = Math.min(sumW, 1);
+        if (sumW > 0) { a = (sumA / sumW) * cover; shade = sumS / sumW; }
+        if (cover < 1 && v) {
+          const r = v[i], gg = v[i + 1], b = v[i + 2];
+          const mn = Math.min(r, gg, b), mx = Math.max(r, gg, b);
+          const va = sm(110, 215, mn) * (1 - sm(28, 70, mx - mn)) * 0.9 * (1 - cover);
+          if (va > 0) shade = (shade * a + sm(150, 245, mn) * va) / (a + va);
+          a += va;
+        }
+        const grey = 192 + 63 * shade;
+        o[i] = grey; o[i + 1] = grey; o[i + 2] = Math.min(255, grey + 4);
+        o[i + 3] = a * 255;
+      }
     }
+    return o;
+  }
 
-    window.onload = () => {
-        initThree();
-        cameraInput.start();
-        animate();
+  // GPM IMERG's rainbow palette → Zoom-Earth-style blue→magenta rain, whitish snow
+  function rainPixels(p, levels) {
+    const sm = (e0, e1, x) => { const t = Math.min(Math.max((x - e0) / (e1 - e0), 0), 1); return t * t * (3 - 2 * t); };
+    const style = (r, g, b) => {
+      const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+      const val = max / 255, sat = max ? d / max : 0;
+      let h = 0;
+      if (d) {
+        if (max === r) h = ((g - b) / d) % 6;
+        else if (max === g) h = (b - r) / d + 2;
+        else h = (r - g) / d + 4;
+        h *= 60; if (h < 0) h += 360;
+      }
+      if (sat < 0.12) return [235, 245, 255, 0.5 * val];                // whitish → light snow
+      if (h >= 175 && h < 290) {                                         // IMERG's blue/violet ramp = snow
+        const k = sm(0.95, 0.35, val);
+        return [225 + 30 * k, 238 + 17 * k, 255, 0.45 + 0.4 * k];
+      }
+      let lvl;
+      if (h >= 70 && h < 175) lvl = 0;                                   // green / cyan: light
+      else if (h >= 45 && h < 70) lvl = 1;                               // yellow: moderate
+      else if (h >= 22 && h < 45) lvl = 2;                               // orange: heavy
+      else lvl = val > 0.62 ? 3 : 4;                                     // red / dark red: very heavy / extreme
+      return levels[lvl];
+    };
+    const o = new Uint8ClampedArray(p.length);
+    const cache = new Map();
+    for (let i = 0; i < p.length; i += 4) {
+      if (p[i + 3] < 16) continue;
+      const k = (p[i] << 16) | (p[i + 1] << 8) | p[i + 2];
+      let s = cache.get(k);
+      if (!s) { s = style(p[i], p[i + 1], p[i + 2]); cache.set(k, s); }
+      o[i] = s[0]; o[i + 1] = s[1]; o[i + 2] = s[2]; o[i + 3] = s[3] * (p[i + 3] / 255) * 255;
+    }
+    return o;
+  }
+
+  // Two-pass separable box blur (≈ gaussian) on RGBA, premultiplied so transparent edges don't darken
+  function boxBlur(d, W, H, r) {
+    if (!(r >= 1)) return d;
+    const n = W * H;
+    const f = new Float32Array(n * 4);
+    for (let i = 0; i < n; i++) {
+      const a = d[i * 4 + 3] / 255;
+      f[i * 4] = d[i * 4] * a; f[i * 4 + 1] = d[i * 4 + 1] * a; f[i * 4 + 2] = d[i * 4 + 2] * a; f[i * 4 + 3] = d[i * 4 + 3];
+    }
+    const buf = new Float32Array(Math.max(W, H) * 4);
+    const line = (start, stride, len) => {
+      for (let i = 0; i < len; i++) { const k = start + i * stride; buf[i * 4] = f[k]; buf[i * 4 + 1] = f[k + 1]; buf[i * 4 + 2] = f[k + 2]; buf[i * 4 + 3] = f[k + 3]; }
+      const inv = 1 / (2 * r + 1);
+      for (let c = 0; c < 4; c++) {
+        let acc = 0;
+        for (let i = -r; i <= r; i++) acc += buf[Math.min(Math.max(i, 0), len - 1) * 4 + c];
+        for (let i = 0; i < len; i++) {
+          f[start + i * stride + c] = acc * inv;
+          acc += buf[Math.min(i + r + 1, len - 1) * 4 + c] - buf[Math.max(i - r, 0) * 4 + c];
+        }
+      }
+    };
+    for (let pass = 0; pass < 2; pass++) {
+      for (let y = 0; y < H; y++) line(y * W * 4, 4, W);
+      for (let x = 0; x < W; x++) line(x * 4, W * 4, H);
+    }
+    for (let i = 0; i < n; i++) {
+      const a = f[i * 4 + 3], k = a > 0 ? 255 / a : 0;
+      d[i * 4] = f[i * 4] * k; d[i * 4 + 1] = f[i * 4 + 1] * k; d[i * 4 + 2] = f[i * 4 + 2] * k; d[i * 4 + 3] = a;
+    }
+    return d;
+  }
+
+  // ---------- Background image worker: fetch + decode + process off the main thread ----------
+  const workerSource = () => `
+    ${cloudPixels.toString()}
+    ${rainPixels.toString()}
+    ${boxBlur.toString()}
+    const load = async (url, W, H) => {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const bmp = await createImageBitmap(await res.blob());
+      const c = new OffscreenCanvas(W, H);
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(bmp, 0, 0, W, H);
+      if (bmp.close) bmp.close();
+      return ctx.getImageData(0, 0, W, H).data;
+    };
+    self.onmessage = async (e) => {
+      const job = e.data;
+      try {
+        let out, extra = {};
+        if (job.kind === 'clouds') {
+          const got = await Promise.allSettled(job.sats.map((s) => load(s.url, job.W, job.H)));
+          const sats = got.map((r, k) => (r.status === 'fulfilled' ? { px: r.value, lon: job.sats[k].lon } : null)).filter(Boolean);
+          let v = null, viirsDate = null;
+          for (const c of job.viirs) { try { v = await load(c.url, job.W, job.H); viirsDate = c.date; break; } catch (_) {} }
+          if (!sats.length && !v) throw new Error('No cloud imagery');
+          out = cloudPixels(sats, v, job.box, job.W, job.H);
+          extra = { geo: sats.length, viirsDate };
+        } else {
+          out = rainPixels(await load(job.url, job.W, job.H), job.levels);
+        }
+        boxBlur(out, job.W, job.H, Math.round(job.blur || 0));
+        self.postMessage(Object.assign({ id: job.id, ok: true, pixels: out.buffer }, extra), [out.buffer]);
+      } catch (err) {
+        self.postMessage({ id: job.id, ok: false, error: String((err && err.message) || err) });
+      }
+    };
+  `;
+
+  let imageWorker;                         // undefined = not tried yet, false = unavailable
+  const workerJobs = new Map();
+  let workerSeq = 0;
+  function getWorker() {
+    if (imageWorker !== undefined) return imageWorker;
+    try {
+      if (typeof OffscreenCanvas === 'undefined' || typeof createImageBitmap === 'undefined') throw new Error('OffscreenCanvas unsupported');
+      const w = new Worker(URL.createObjectURL(new Blob([workerSource()], { type: 'text/javascript' })));
+      w.onmessage = (e) => {
+        const job = workerJobs.get(e.data.id);
+        if (!job) return;
+        workerJobs.delete(e.data.id);
+        if (e.data.ok) job.resolve(e.data); else job.reject(new Error(e.data.error));
+      };
+      w.onerror = (e) => console.warn('image worker:', e.message);
+      imageWorker = w;
+    } catch (e) {
+      console.warn('Image worker unavailable, processing on the main thread:', e.message);
+      imageWorker = false;
+    }
+    return imageWorker;
+  }
+  function runWorker(job) {
+    return new Promise((resolve, reject) => {
+      const id = ++workerSeq;
+      workerJobs.set(id, { resolve, reject });
+      imageWorker.postMessage(Object.assign({ id }, job));
+    });
+  }
+
+  function pixelTexture(buffer, W, H) {
+    const t = new THREE.DataTexture(new Uint8Array(buffer), W, H, THREE.RGBAFormat);
+    t.flipY = true;                                  // rows arrive top-to-bottom, like an image
+    t.generateMipmaps = true;
+    t.minFilter = THREE.LinearMipmapLinearFilter;
+    t.magFilter = THREE.LinearFilter;
+    t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    t.needsUpdate = true;
+    return t;
+  }
+
+  // blurPx softens the blocky look when a small area is magnified beyond the satellites' resolution
+  async function cloudTexture(box, W, H, satW, satH, viirsDate, blurPx = 0) {
+    const sats = GEO_SATS.map((s) => ({ url: gibsUrl(s.layer, satW, satH, 'image/png', null, box), lon: s.lon }));
+    const days = viirsDate ? [viirsDate] : [ymd(-1), ymd(-2)];
+    const viirs = days.map((d) => ({ url: gibsUrl('VIIRS_NOAA20_CorrectedReflectance_TrueColor', W, H, 'image/jpeg', d, box), date: d }));
+    if (getWorker()) {
+      const r = await runWorker({ kind: 'clouds', box, W, H, sats, viirs, blur: blurPx });
+      return { texture: pixelTexture(r.pixels, W, H), geo: r.geo, viirsDate: r.viirsDate };
+    }
+    const got = await Promise.allSettled(sats.map((s) => loadImage(s.url)));
+    const satPx = got.map((r, k) => (r.status === 'fulfilled' ? { px: pixelsOf(r.value, W, H), lon: sats[k].lon } : null)).filter(Boolean);
+    let v = null, vd = null;
+    for (const c of viirs) { try { v = pixelsOf(await loadImage(c.url), W, H); vd = c.date; break; } catch (_) { /* previous day */ } }
+    if (!satPx.length && !v) throw new Error('No cloud imagery');
+    const out = boxBlur(cloudPixels(satPx, v, box, W, H), W, H, Math.round(blurPx));
+    return { texture: pixelTexture(out.buffer, W, H), geo: satPx.length, viirsDate: vd };
+  }
+
+  async function rainTexture(box, W, H, blurPx = 0) {
+    const url = gibsUrl('IMERG_Precipitation_Rate_30min', W, H, 'image/png', null, box);
+    if (getWorker()) {
+      const r = await runWorker({ kind: 'rain', url, W, H, levels: RAIN_LEVELS, blur: blurPx });
+      return pixelTexture(r.pixels, W, H);
+    }
+    const out = boxBlur(rainPixels(pixelsOf(await loadImage(url), W, H), RAIN_LEVELS), W, H, Math.round(blurPx));
+    return pixelTexture(out.buffer, W, H);
+  }
+
+  let cloudsLoading = false;
+  async function loadClouds() {
+    if (cloudsLoading) return;
+    cloudsLoading = true;
+    setStatus('clouds', 'Loading satellite imagery…');
+    try {
+      const { texture, geo, viirsDate } = await cloudTexture(WORLD_BOX, 4096, 2048, 3072, 1536);
+      state.viirsDate = viirsDate;
+      if (cloudMesh.material.map) cloudMesh.material.map.dispose();
+      cloudMesh.material.map = texture;
+      cloudMesh.material.needsUpdate = true;
+      cloudMesh.visible = layers.clouds;
+
+      const parts = [];
+      if (geo) parts.push('Live GOES + Himawari IR');
+      if (viirsDate) parts.push(`NOAA-20 ${viirsDate} fills the gaps`);
+      setStatus('clouds', parts.join(' · ') + ` · fetched ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
+    } catch (e) {
+      console.warn(e);
+      setStatus('clouds', 'Unavailable, will retry', true);
+    } finally {
+      cloudsLoading = false;
+    }
+  }
+
+  // =====================================================================
+  // Rain: GPM IMERG latest 30-minute frame, recoloured to a blue→magenta scale
+  // =====================================================================
+  const RAIN_LEVELS = [
+    [110, 190, 255, 0.55], [40, 110, 245, 0.72], [95, 60, 220, 0.82], [175, 50, 200, 0.88], [245, 60, 150, 0.92],
+  ];
+
+  async function loadRain() {
+    setStatus('rain', 'Loading…');
+    try {
+      const tex = await rainTexture(WORLD_BOX, 2048, 1024);
+      if (rainMesh.material.map) rainMesh.material.map.dispose();
+      rainMesh.material.map = tex;
+      rainMesh.material.needsUpdate = true;
+      rainMesh.visible = layers.rain;
+      setStatus('rain', `GPM IMERG, latest 30-min frame (few hours delay) · fetched ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
+    } catch (e) {
+      console.warn(e);
+      setStatus('rain', 'Unavailable, will retry', true);
+    }
+  }
+
+  // =====================================================================
+  // Deep-zoom detail: when you stop on an area past ~3×, fetch sharper relief, clouds and rain
+  // for just that box and lay them over the globe as patches (like a slippy map's higher zoom tiles).
+  // =====================================================================
+  const DETAIL_MIN_ZOOM = 3;
+  const zoomDetail = { meshes: [], box: null, zoom: 0, loading: false, lastView: null, lastMove: 0, seq: 0 };
+
+  // Where the camera's line of sight hits the globe (analytic, so it's cheap enough every frame)
+  function viewCentre() {
+    const c = globe.position, r = R * globe.scale.x;
+    const o = camera.position;
+    const ox = o.x - c.x, oy = o.y - c.y, oz = o.z - c.z;      // ray direction is (0, 0, -1)
+    const disc = r * r - ox * ox - oy * oy;
+    if (disc < 0) return null;
+    const hit = new THREE.Vector3(o.x, o.y, c.z + Math.sqrt(disc));
+    const ll = vecToLatLon(globe.worldToLocal(hit));
+    return { lat: ll.lat, lon: ll.lon, height: oz - Math.sqrt(disc) };
+  }
+
+  function viewBox(c) {
+    const halfH = c.height * Math.tan((camera.fov * D) / 2);
+    const latHalf = Math.min(35, (halfH / R) / D * 1.6);
+    const lonHalf = Math.min(70, latHalf * camera.aspect / Math.max(0.2, Math.cos(c.lat * D)));
+    return {
+      minLon: clamp(c.lon - lonHalf, -180, 180), maxLon: clamp(c.lon + lonHalf, -180, 180),
+      minLat: clamp(c.lat - latHalf, -85, 85), maxLat: clamp(c.lat + latHalf, -85, 85),
+    };
+  }
+
+  function patchGeometry(b, r) {
+    const lonExt = b.maxLon - b.minLon, latExt = b.maxLat - b.minLat;
+    const ws = clamp(Math.ceil(lonExt / 0.4), 24, 160), hs = clamp(Math.ceil(latExt / 0.4), 24, 160);
+    return new THREE.SphereGeometry(r, ws, hs, (b.minLon + 180) * D, lonExt * D, (90 - b.maxLat) * D, latExt * D);
+  }
+
+  function clearDetail() {
+    for (const m of zoomDetail.meshes) {
+      detailGroup.remove(m);
+      m.geometry.dispose();
+      if (m.material.map) m.material.map.dispose();
+      m.material.dispose();
+    }
+    zoomDetail.meshes = [];
+    zoomDetail.box = null;
+  }
+
+  function updateDetail(now) {
+    if (zoomLevel < DETAIL_MIN_ZOOM - 0.5) {
+      if (zoomDetail.meshes.length) clearDetail();
+      zoomDetail.seq++;                                      // cancel anything in flight
+      return;
+    }
+    if (zoomLevel < DETAIL_MIN_ZOOM || zoomDetail.loading) return;
+    const c = viewCentre();
+    if (!c) return;
+    // Wait until the view has settled for half a second
+    const v = zoomDetail.lastView;
+    if (!v || Math.abs(v.lat - c.lat) > 0.02 || Math.abs(v.lon - c.lon) > 0.02 || Math.abs(Math.log(zoomLevel / v.z)) > 0.02) {
+      zoomDetail.lastView = { lat: c.lat, lon: c.lon, z: zoomLevel };
+      zoomDetail.lastMove = now;
+      return;
+    }
+    if (now - zoomDetail.lastMove < 500) return;
+    const want = viewBox(c);
+    const b = zoomDetail.box;
+    const inside = b && want.minLon >= b.minLon && want.maxLon <= b.maxLon && want.minLat >= b.minLat && want.maxLat <= b.maxLat;
+    if (inside && zoomLevel < zoomDetail.zoom * 1.8) return;    // current patch still covers the view sharply enough
+    loadDetail(want);
+  }
+
+  async function loadDetail(b) {
+    const seq = ++zoomDetail.seq;
+    zoomDetail.loading = true;
+    const lonExt = b.maxLon - b.minLon, latExt = b.maxLat - b.minLat;
+    let W = 2048, H = Math.round(2048 * latExt / lonExt);
+    if (H > 2048) { W = Math.round(2048 * lonExt / latExt); H = 2048; }
+    W = Math.max(W, 256); H = Math.max(H, 256);
+    const kmPerPx = lonExt * 111.32 * Math.cos(((b.minLat + b.maxLat) / 2) * D) / W;
+    const rainW = Math.max(256, W >> 1), rainH = Math.max(256, H >> 1);
+    try {
+      const [baseR, cloudR, rainR] = await Promise.allSettled([
+        loadImage(gibsUrl('BlueMarble_ShadedRelief_Bathymetry', W, H, 'image/jpeg', null, b)),
+        cloudTexture(b, W, H, W, H, state.viirsDate, clamp(2.5 / kmPerPx, 0, 6)),         // IR ≈ 2–5 km pixels
+        rainTexture(b, rainW, rainH, clamp(5.5 / (kmPerPx * W / rainW), 0, 8)),            // IMERG ≈ 11 km cells
+      ]);
+      if (seq !== zoomDetail.seq) return;                      // the view moved on (or zoomed out) meanwhile
+      clearDetail();
+      const tex = (img) => {
+        const t = new THREE.Texture(img);
+        t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        t.needsUpdate = true;
+        return t;
+      };
+      if (baseR.status === 'fulfilled') {
+        const m = new THREE.Mesh(patchGeometry(b, R * (1 + LIFT.basePatch[0])), new THREE.MeshLambertMaterial({ map: tex(baseR.value) }));
+        m.userData.layer = 'base';
+        detailGroup.add(m); zoomDetail.meshes.push(m);
+      }
+      // Cloud and rain patches write depth so the blurrier global layers underneath don't double up
+      if (cloudR.status === 'fulfilled') {
+        const m = new THREE.Mesh(patchGeometry(b, R * (1 + LIFT.cloudPatch[0])),
+          new THREE.MeshLambertMaterial({ map: cloudR.value.texture, transparent: true, opacity: 0.95, depthWrite: true }));
+        m.renderOrder = -2; m.userData.layer = 'clouds'; m.visible = layers.clouds;
+        detailGroup.add(m); zoomDetail.meshes.push(m); addLift(m, LIFT.cloudPatch);
+      }
+      if (rainR.status === 'fulfilled') {
+        const lift = [LIFT.rain[0] * 1.03, LIFT.rain[1] * 1.05];
+        const m = new THREE.Mesh(patchGeometry(b, R * (1 + lift[0])),
+          new THREE.MeshBasicMaterial({ map: rainR.value, transparent: true, depthWrite: true }));
+        m.renderOrder = -1; m.userData.layer = 'rain'; m.visible = layers.rain;
+        detailGroup.add(m); zoomDetail.meshes.push(m); addLift(m, lift);
+      }
+      updateLifts(zoomLevel);
+      zoomDetail.box = b;
+      zoomDetail.zoom = zoomLevel;
+    } catch (e) {
+      console.warn(e);
+    } finally {
+      zoomDetail.loading = false;
+    }
+  }
+
+  // =====================================================================
+  // Borders, coastlines and place labels (Natural Earth 1:50m)
+  // =====================================================================
+  function linesToSegments(multiLines, r) {
+    let n = 0;
+    for (const line of multiLines) n += Math.max(0, line.length - 1);
+    let pos = new Float32Array(n * 6 * 2);
+    let k = 0;
+    const toXYZ = (lon, lat) => {
+      const phi = (90 - lat) * D, theta = (lon + 180) * D, sp = Math.sin(phi);
+      return [-sp * Math.cos(theta), Math.cos(phi), sp * Math.sin(theta)];
+    };
+    const push = (a, b) => {
+      if (k + 6 > pos.length) { const bigger = new Float32Array(pos.length * 2); bigger.set(pos); pos = bigger; }
+      pos[k++] = a[0] * r; pos[k++] = a[1] * r; pos[k++] = a[2] * r;
+      pos[k++] = b[0] * r; pos[k++] = b[1] * r; pos[k++] = b[2] * r;
+    };
+    for (const line of multiLines) {
+      let prev = toXYZ(line[0][0], line[0][1]);
+      for (let i = 1; i < line.length; i++) {
+        const cur = toXYZ(line[i][0], line[i][1]);
+        const dot = prev[0] * cur[0] + prev[1] * cur[1] + prev[2] * cur[2];
+        const steps = Math.max(1, Math.ceil(Math.acos(Math.min(1, dot)) / (1.5 * D)));
+        if (steps === 1) push(prev, cur);
+        else {
+          // Long segments follow the curve of the globe instead of cutting under it
+          let p0 = prev;
+          for (let s = 1; s <= steps; s++) {
+            const t = s / steps;
+            const x = prev[0] + (cur[0] - prev[0]) * t, y = prev[1] + (cur[1] - prev[1]) * t, z = prev[2] + (cur[2] - prev[2]) * t;
+            const len = Math.hypot(x, y, z) || 1;
+            const p1 = [x / len, y / len, z / len];
+            push(p0, p1);
+            p0 = p1;
+          }
+        }
+        prev = cur;
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos.subarray(0, k), 3));
+    return g;
+  }
+
+  async function loadBorders() {
+    try {
+      const topo = await getJSON(WORLD_ATLAS, 30000);
+      const obj = topo.objects.countries;
+      const lines = countryLines(topo);
+      state.lines.coast50 = lines.coast;
+      state.lines.border50 = lines.border;
+
+      const features = topojson.feature(topo, obj).features;
+      state.countries = features;
+      for (const f of features) {
+        if (!f.properties || !f.properties.name) continue;
+        // Label the largest polygon so countries with far-flung territories land in the right place
+        let geom = f.geometry;
+        if (geom.type === 'MultiPolygon') {
+          let best = null, bestA = -1;
+          for (const poly of geom.coordinates) {
+            const a = d3.geoArea({ type: 'Polygon', coordinates: poly });
+            if (a > bestA) { bestA = a; best = poly; }
+          }
+          geom = { type: 'Polygon', coordinates: best };
+        }
+        const area = d3.geoArea(geom);
+        if (area > 2 * Math.PI) continue;                // inverted winding guard
+        const [lon, lat] = d3.geoCentroid(geom);
+        // Small countries appear only once you zoom in enough for their name to fit
+        addPlace('countries', 'country', shortName(f.properties.name), lat, lon, Math.max(1.2, Math.pow(0.05 / area, 0.25)), Infinity, -area);
+      }
+      for (const [n, lat, lon] of CONTINENTS) addPlace('base', 'continent', n, lat, lon, 0, 1.9, 0);
+      for (const [n, lat, lon] of OCEANS) addPlace('base', 'ocean', n, lat, lon, 0, 2.4, 1);
+      sortPlaces('countries');
+      sortPlaces('base');
+      setStatus('borders', 'Natural Earth · finer borders, provinces and cities load as you zoom in');
+    } catch (e) {
+      console.warn(e);
+      setStatus('borders', 'Unavailable', true);
+    }
+  }
+  function shortName(n) {
+    return ({
+      'United States of America': 'United States', 'Dem. Rep. Congo': 'DR Congo', 'Central African Rep.': 'C. African Rep.',
+      'Bosnia and Herz.': 'Bosnia', 'Dominican Rep.': 'Dominican Rep.', 'S. Sudan': 'South Sudan', 'W. Sahara': 'W. Sahara',
+    })[n] || n;
+  }
+  // Places live in tiers drawn in priority order (continents → countries → provinces → cities).
+  // Each tier is sorted by the zoom it appears at; DOM nodes are created only when first shown.
+  function addPlace(tier, kind, text, lat, lon, minZoom, maxZoom, rank, big) {
+    state.placeTiers[tier].push({ kind, text, unit: latLonToVec(lat, lon, 1), minZoom, maxZoom, rank, big: !!big, el: null, shown: false });
+  }
+  function sortPlaces(tier) {
+    state.placeTiers[tier].sort((a, b) => (a.minZoom - b.minZoom) || (a.rank - b.rank));
+  }
+
+  function countryLines(topo) {
+    const obj = topo.objects.countries;
+    const coast = new THREE.LineSegments(linesToSegments(topojson.mesh(topo, obj, (a, b) => a === b).coordinates, RADII.borders),
+      new THREE.LineBasicMaterial({ color: 0x05080d, transparent: true, opacity: 0.75 }));
+    const border = new THREE.LineSegments(linesToSegments(topojson.mesh(topo, obj, (a, b) => a !== b).coordinates, RADII.borders),
+      new THREE.LineBasicMaterial({ color: 0x0b1018, transparent: true, opacity: 0.55 }));
+    bordersGroup.add(coast, border);
+    return { coast, border };
+  }
+
+  // ---------- Loaded on demand as you zoom in ----------
+  const lazy = { admin1: null, cities: null };
+
+  function loadAdmin1() {
+    if (lazy.admin1) return;
+    lazy.admin1 = (async () => {
+      const [lines, labels] = await Promise.all([getJSON(ADMIN1_LINES, 60000), getJSON(ADMIN1_LABELS, 30000)]);
+      if (lines && lines.lines) {
+        const polylines = lines.lines.map(([, q]) => {
+          const pts = [];
+          for (let i = 0; i < q.length; i += 2) pts.push([q[i] / 100, q[i + 1] / 100]);
+          return pts;
+        });
+        const seg = new THREE.LineSegments(linesToSegments(polylines, RADII.borders),
+          new THREE.LineBasicMaterial({ color: 0x1b2533, transparent: true, opacity: 0.5 }));
+        seg.visible = false;
+        bordersGroup.add(seg);
+        state.lines.admin1 = seg;
+      }
+      if (labels && labels.rows) {
+        for (const [name, lon, lat, minLabel] of labels.rows) {
+          addPlace('provinces', 'province', name, lat, lon, Math.max(2, Math.pow(2, minLabel - 2.8)), Infinity, minLabel);
+        }
+        sortPlaces('provinces');
+      }
+    })().catch((e) => console.warn('provinces', e));
+  }
+
+  function loadCities() {
+    if (lazy.cities) return;
+    lazy.cities = loadPlacesData().then(({ rows }) => {
+      for (const r of rows) {
+        // Cities appear about 1.5× later than Natural Earth suggests; towns under 50k only when very close
+        let minZoom = Math.max(2.5, Math.pow(2, (r[6] || 8) - 2.0));
+        if (r[5] < 50000) minZoom = Math.max(minZoom, 30);
+        addPlace('cities', 'city', r[0], r[3], r[4], minZoom, Infinity, -r[5], r[5] >= 1e6);
+      }
+      sortPlaces('cities');
+    });
+  }
+
+  // The 1:10m world coastline was dropped: ~950k line vertices redrawn every frame made rotation lag
+  // when the webcam hand tracking was also using the GPU. 1:50m stays accurate to a few km.
+  function updateLineDetail(z) {
+    if (z >= 1.8) { loadAdmin1(); loadCities(); }
+    if (state.lines.admin1) state.lines.admin1.visible = z >= 2;
+  }
+
+  // =====================================================================
+  // Marker textures
+  // =====================================================================
+  const texCache = new Map();
+  function canvasTex(key, size, draw) {
+    if (texCache.has(key)) return texCache.get(key);
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    draw(c.getContext('2d'), size);
+    const t = new THREE.CanvasTexture(c);
+    texCache.set(key, t);
+    return t;
+  }
+  // Solid dot with a white ring, like Zoom Earth's storm markers
+  const discTex = (color) => canvasTex('disc' + color, 128, (ctx) => {
+    ctx.shadowColor = 'rgba(0,0,0,.55)'; ctx.shadowBlur = 10;
+    ctx.beginPath(); ctx.arc(64, 64, 46, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.beginPath(); ctx.arc(64, 64, 37, 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill();
+  });
+  const glyphTex = () => canvasTex('glyph', 128, (ctx) => {
+    ctx.translate(64, 64); ctx.lineCap = 'round';
+    const arms = () => {
+      ctx.beginPath(); ctx.arc(0, 0, 13, 0, Math.PI * 2); ctx.stroke();
+      for (const rot of [0, Math.PI]) {
+        ctx.save(); ctx.rotate(rot);
+        ctx.beginPath(); ctx.moveTo(0, -13); ctx.quadraticCurveTo(-4, -32, -30, -28); ctx.stroke();
+        ctx.restore();
+      }
+    };
+    ctx.strokeStyle = 'rgba(10,15,24,.85)'; ctx.lineWidth = 8; arms();
+  });
+  const glowTex = () => canvasTex('glow', 128, (ctx) => {
+    const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+    g.addColorStop(0, 'rgba(255,255,255,0.75)'); g.addColorStop(0.4, 'rgba(255,255,255,0.25)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, 128, 128);
+  });
+  const ringTex = () => canvasTex('ring', 128, (ctx) => {
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 6;
+    ctx.beginPath(); ctx.arc(64, 64, 56, 0, Math.PI * 2); ctx.stroke();
+  });
+  const dotTex = () => canvasTex('dot', 64, (ctx) => {
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(32, 32, 22, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,.6)'; ctx.lineWidth = 6; ctx.stroke();
+  });
+  const hollowTex = () => canvasTex('hollow', 64, (ctx) => {
+    ctx.strokeStyle = 'rgba(0,0,0,.55)'; ctx.lineWidth = 11; ctx.beginPath(); ctx.arc(32, 32, 20, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 6; ctx.stroke();
+  });
+  const badgeTex = (type, alert) => canvasTex('badge' + type + alert, 128, (ctx) => {
+    const col = ALERT_COLORS[alert] || '#fff';
+    ctx.shadowColor = 'rgba(0,0,0,.5)'; ctx.shadowBlur = 8;
+    ctx.beginPath(); ctx.arc(64, 64, 50, 0, Math.PI * 2); ctx.fillStyle = 'rgba(14,20,30,.92)'; ctx.fill();
+    ctx.shadowBlur = 0; ctx.lineWidth = 9; ctx.strokeStyle = col; ctx.stroke();
+    if (type === 'EQ') {
+      ctx.strokeStyle = col; ctx.lineWidth = 6;
+      for (const r of [10, 22, 34]) { ctx.beginPath(); ctx.arc(64, 64, r, 0, Math.PI * 2); ctx.stroke(); }
+    } else {
+      ctx.font = '56px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(TYPES[type].icon, 64, 68);
+    }
+  });
+
+  // Thick track drawn as a ribbon on the sphere (WebGL lines are always 1px)
+  function ribbon(points, colors, width, r, dash) {
+    const pts = [], cols = [];
+    const stepAng = (dash ? 0.35 : 1.0) * D;
+    for (let i = 0; i < points.length; i++) {
+      const a = latLonToVec(points[i].lat, points[i].lon, 1);
+      pts.push(a); cols.push(colors[i]);
+      if (i === points.length - 1) break;
+      const b = latLonToVec(points[i + 1].lat, points[i + 1].lon, 1);
+      const steps = Math.max(1, Math.ceil(a.angleTo(b) / stepAng));
+      for (let s = 1; s < steps; s++) { pts.push(a.clone().lerp(b, s / steps).normalize()); cols.push(colors[i]); }
+    }
+    const pos = [], col = [];
+    let dist = 0;
+    const half = width / 2 / r;
+    const sideAt = (i) => {
+      const t = pts[Math.min(i + 1, pts.length - 1)].clone().sub(pts[Math.max(i - 1, 0)]);
+      return new THREE.Vector3().crossVectors(t, pts[i]).normalize().multiplyScalar(half);
+    };
+    for (let i = 0; i < pts.length - 1; i++) {
+      const segLen = pts[i].angleTo(pts[i + 1]);
+      const mid = dist + segLen / 2;
+      dist += segLen;
+      if (dash && Math.floor(mid / (dash * D)) % 2 === 1) continue;
+      const s0 = sideAt(i), s1 = sideAt(i + 1);
+      const v = [
+        pts[i].clone().add(s0), pts[i].clone().sub(s0), pts[i + 1].clone().add(s1), pts[i + 1].clone().sub(s1),
+      ].map((p) => p.normalize().multiplyScalar(r));
+      for (const k of [0, 1, 2, 1, 3, 2]) {
+        pos.push(v[k].x, v[k].y, v[k].z);
+        const c = k < 2 ? cols[i] : cols[i + 1];
+        col.push(c.r, c.g, c.b);
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    return new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0.95, depthWrite: false }));
+  }
+
+  // 1-pixel track for deep zoom, where a ribbon of fixed world width would be kilometres wide
+  function thinTrack(points, colors, r, dashed) {
+    const pos = [], col = [];
+    for (let i = 0; i < points.length; i++) {
+      const a = latLonToVec(points[i].lat, points[i].lon, 1);
+      const b = i < points.length - 1 ? latLonToVec(points[i + 1].lat, points[i + 1].lon, 1) : null;
+      const steps = b ? Math.max(1, Math.ceil(a.angleTo(b) / (0.25 * D))) : 1;
+      for (let s = 0; s < steps; s++) {
+        const p = b ? a.clone().lerp(b, s / steps).normalize() : a;
+        pos.push(p.x * r, p.y * r, p.z * r);
+        col.push(colors[i].r, colors[i].g, colors[i].b);
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    const mat = dashed
+      ? new THREE.LineDashedMaterial({ vertexColors: true, dashSize: 0.004, gapSize: 0.003, transparent: true, opacity: 0.95 })
+      : new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.95 });
+    const line = new THREE.Line(g, mat);
+    if (dashed) line.computeLineDistances();
+    line.visible = false;
+    return line;
+  }
+
+  function coneMesh(ring) {
+    let pts = ring.map(([lon, lat]) => ({ lon, lat }));
+    if (pts.length > 2 && pts[0].lon === pts[pts.length - 1].lon && pts[0].lat === pts[pts.length - 1].lat) pts.pop();
+    const lons = pts.map((p) => p.lon);
+    if (Math.max(...lons) - Math.min(...lons) > 180) pts = pts.map((p) => ({ lon: p.lon < 0 ? p.lon + 360 : p.lon, lat: p.lat }));
+    const contour = pts.map((p) => new THREE.Vector2(p.lon, p.lat));
+    const tris = THREE.ShapeUtils.triangulateShape(contour, []);
+    const pos = [];
+    for (const t of tris) for (const k of t) { const v = latLonToVec(pts[k].lat, pts[k].lon, RADII.cone); pos.push(v.x, v.y, v.z); }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    const group = new THREE.Group();
+    group.add(new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false })));
+    const outline = pts.concat([pts[0]]).map((p) => latLonToVec(p.lat, p.lon, RADII.cone));
+    group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(outline),
+      new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55 })));
+    return group;
+  }
+
+  // =====================================================================
+  // Disasters (GDACS)
+  // =====================================================================
+  async function gdacsSearch(params) {
+    const d = await getJSON(`${GDACS}/events/geteventlist/SEARCH?alertlevel=Green;Orange;Red&toDate=${ymd(1)}&${params}`);
+    return (d && d.features) || [];
+  }
+
+  function fromFeature(f) {
+    const p = f.properties;
+    const [lon, lat] = f.geometry.coordinates;
+    const sev = p.severitydata || {};
+    return {
+      key: `${p.eventtype}-${p.eventid}`,
+      type: p.eventtype, id: p.eventid, episode: p.episodeid,
+      gdacsName: p.name, eventname: p.eventname || '',
+      lat, lon,
+      alert: p.alertlevel, alertScore: p.alertscore || 0,
+      country: p.country || '',
+      countries: (p.affectedcountries || []).map((c) => c.countryname),
+      from: parseGdacsDate(p.fromdate), to: parseGdacsDate(p.todate),
+      current: p.iscurrent === 'true',
+      severity: sev.severity, severityText: sev.severitytext || '', severityUnit: sev.severityunit,
+      desc: p.htmldescription || '',
+      urls: p.url || {},
+    };
+  }
+
+  function stormName(ev) {
+    const base = (ev.eventname || '').replace(/-\d+$/, '');
+    if (!base || /\d/.test(base) || /^(ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN|INVEST)\b/.test(base)) return null;
+    return titleCase(base);
+  }
+
+  function stormTitle(ev) {
+    const kts = ev.now ? ev.now.kts : null;
+    const name = stormName(ev);
+    let word;
+    if (kts == null) word = 'Tropical Cyclone';
+    else if (kts < 34) word = 'Tropical Depression';
+    else if (kts < 64) word = 'Tropical Storm';
+    else if (ev.lat > 0 && ev.lon > 100) word = 'Typhoon';
+    else if (ev.lat > 0 && ev.lon < -30) word = 'Hurricane';
+    else word = 'Cyclone';
+    return name ? `${word} ${name}` : `${word} ${(ev.eventname || '').split('-')[0]}`;
+  }
+
+  function eventTitle(ev) {
+    if (ev.type === 'TC') return stormTitle(ev);
+    if (ev.type === 'EQ') return `M${(+ev.severity || 0).toFixed(1)} earthquake · ${ev.country || 'at sea'}`;
+    if (ev.type === 'FL') return `Flood · ${ev.country}`;
+    if (ev.type === 'VO') return (ev.gdacsName || 'Volcano').replace(/^Volcano\s*/i, '') + ' volcano';
+    if (ev.type === 'WF') return `Wildfire · ${ev.country}`;
+    return ev.gdacsName;
+  }
+
+  async function enrichCyclone(ev) {
+    const det = await getJSON(`${GDACS}/events/geteventdata?eventtype=TC&eventid=${ev.id}`);
+    const p = (det && det.properties) || {};
+    ev.urls = Object.assign({}, ev.urls, p.url || {});
+    const tlUrl = p.impacts && p.impacts[0] && p.impacts[0].resource && p.impacts[0].resource.timeline;
+    const [tl, geo] = await Promise.allSettled([
+      tlUrl ? getJSON(tlUrl) : Promise.resolve(null),
+      ev.urls.geometry ? getJSON(ev.urls.geometry) : Promise.resolve(null),
+    ]);
+    const items = tl.status === 'fulfilled' && tl.value && tl.value.channel ? [].concat(tl.value.channel.item || []) : [];
+    ev.track = items.map((it) => ({
+      lat: +it.latitude, lon: +it.longitude,
+      time: parseAdvisoryDate(it.advisory_datetime),
+      kts: isFinite(+it.wind_speed) ? +it.wind_speed * 1.943844 : null,   // GDACS wind_speed is m/s
+      gustKts: isFinite(+it.wind_gusts) ? +it.wind_gusts * 1.943844 : null,
+      pressure: +it.pressure || null,
+      status: Array.isArray(it.storm_status) ? it.storm_status[0] : it.storm_status,
+      actual: String(it.actual).toLowerCase() === 'true',
+      current: String(it.current).toLowerCase() === 'true',
+      pop39: +it.pop39 || 0, pop74: +it.pop74 || 0, popSurge: +it.popstormsurge || 0,
+      country: it.country || '',
+    })).filter((p) => isFinite(p.lat) && isFinite(p.lon));
+    const actual = ev.track.filter((p) => p.actual);
+    ev.now = ev.track.find((p) => p.current) || actual[actual.length - 1] || null;
+    if (ev.now) { ev.lat = ev.now.lat; ev.lon = ev.now.lon; }
+    ev.forecast = ev.track.filter((p) => !p.actual);
+    const peak = ev.track.reduce((m, p) => (p.kts != null && (!m || p.kts > m.kts) ? p : m), null);
+    ev.peak = peak;
+    if (geo.status === 'fulfilled' && geo.value && geo.value.features) {
+      const cone = geo.value.features.find((f) => f.properties && f.properties.Class === 'Poly_Cones');
+      if (cone && cone.geometry && cone.geometry.type === 'Polygon') ev.cone = cone.geometry.coordinates[0];
+    }
+  }
+
+  let eventsLoading = false;
+  async function fetchEvents() {
+    if (eventsLoading) return;
+    eventsLoading = true;
+    $('s-events').textContent = 'Updating…';
+    try {
+      const reqs = await Promise.allSettled([
+        gdacsSearch(`eventlist=TC&fromDate=${ymd(-30)}`),
+        gdacsSearch(`eventlist=EQ&fromDate=${ymd(-3)}`),
+        gdacsSearch(`eventlist=FL;VO&fromDate=${ymd(-60)}`),
+        gdacsSearch(`eventlist=WF&fromDate=${ymd(-14)}`),
+        gdacsSearch(`eventlist=WF&fromDate=${ymd(-14)}&pagenumber=2`),
+      ]);
+      if (reqs.every((r) => r.status === 'rejected')) throw reqs[0].reason;
+
+      const byKey = new Map();
+      for (const r of reqs) {
+        if (r.status !== 'fulfilled') continue;
+        for (const f of r.value) {
+          if (!f.geometry || f.geometry.type !== 'Point') continue;
+          const ev = fromFeature(f);
+          const prev = byKey.get(ev.key);
+          if (!prev || ev.episode > prev.episode) byKey.set(ev.key, ev);
+        }
+      }
+      const now = Date.now();
+      let list = [...byKey.values()].filter((ev) => {
+        // Keep storms that ended in the last 2 weeks: that's when impact reporting appears
+        if (ev.type === 'TC') return ev.current || (ev.to && now - ev.to.getTime() < 14 * 864e5);
+        if (ev.type === 'EQ') return true;
+        return ev.current;
+      });
+      // Wildfires are numerous: keep the largest 25 plus any orange/red ones
+      const fires = list.filter((e) => e.type === 'WF').sort((a, b) => (b.severity || 0) - (a.severity || 0));
+      const keepFires = new Set(fires.filter((e, i) => i < 25 || e.alert !== 'Green').map((e) => e.key));
+      list = list.filter((e) => e.type !== 'WF' || keepFires.has(e.key));
+
+      await Promise.allSettled(list.filter((e) => e.type === 'TC').map(enrichCyclone));
+
+      // Keep extras already fetched for events we have seen
+      const old = new Map(state.events.map((e) => [e.key, e]));
+      for (const ev of list) {
+        const o = old.get(ev.key);
+        if (o && o.extras) ev.extras = o.extras;
+        ev.title = eventTitle(ev);
+        ev.cat = ev.type === 'TC' ? categoryFor(ev.now && ev.now.kts) : null;
+      }
+      state.events = list;
+      state.eventsUpdated = new Date();
+      buildEvents();
+      renderLists();
+      renderChips();
+      updateEventsStatus();
+
+      // First load: swing round to the strongest current cyclone
+      if (!userInteracted && !state.flewInitial) {
+        state.flewInitial = true;
+        const tc = list.filter((e) => e.type === 'TC' && e.current).sort((a, b) => ((b.now && b.now.kts) || 0) - ((a.now && a.now.kts) || 0))[0];
+        if (tc) flyTo(tc.lat, tc.lon, 1.3);
+      }
+      if (state.activeKey) {
+        const ev = state.events.find((e) => e.key === state.activeKey);
+        if (ev) renderDetail(ev); else closeDetail();
+      }
+    } catch (e) {
+      console.warn(e);
+      $('s-events').textContent = 'GDACS unavailable, retrying';
+      if (!state.events.length) {
+        $('tc-list').replaceChildren(node('div', 'empty', 'Could not reach GDACS.'));
+        $('alert-list').replaceChildren();
+      }
+    } finally {
+      eventsLoading = false;
+    }
+  }
+
+  function updateEventsStatus() {
+    if (state.eventsUpdated) $('s-events').textContent = `updated ${ago(state.eventsUpdated)}`;
+  }
+
+  function disposeGroup(group) {
+    group.traverse((o) => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();        // cached textures are shared and kept
+    });
+    group.clear();
+  }
+
+  function buildEvents() {
+    disposeGroup(eventsGroup);
+    labelsEl.querySelectorAll('.ev-label').forEach((el) => el.remove());
+
+    // Pin a sprite to a lat/lon; animate() keeps it at the right height for the current zoom
+    const pin = (sprite, lat, lon, lift) => {
+      sprite.userData.unit = latLonToVec(lat, lon, 1);
+      sprite.userData.lift = lift;
+      sprite.position.copy(sprite.userData.unit).multiplyScalar(liftRadius(lift, zoomLevel));
+      return sprite;
+    };
+    const trackLift = [LIFT.track[0] * 1.001, LIFT.track[1] * 1.05];
+
+    for (const ev of state.events) {
+      const group = new THREE.Group();
+      group.visible = TYPES[ev.type].on;
+      ev.group = group;
+      ev.sprites = [];
+      ev.ribbons = [];
+      ev.thinLines = [];
+
+      if (ev.type === 'TC') {
+        const color = new THREE.Color(ev.cat.color);
+        if (ev.cone && ev.current) { const cone = coneMesh(ev.cone); group.add(cone); addLift(cone, LIFT.cone); }
+        const actual = ev.track ? ev.track.filter((p) => p.actual) : [];
+        if (actual.length > 1) {
+          const cols = actual.map((p) => new THREE.Color(categoryFor(p.kts).color));
+          const rb = ribbon(actual, cols, 0.012, RADII.track, 0);
+          const ln = thinTrack(actual, cols, RADII.track, false);
+          group.add(rb, ln); addLift(rb, LIFT.track); addLift(ln, LIFT.track);
+          ev.ribbons.push(rb); ev.thinLines.push(ln);
+        }
+        if (ev.current && ev.forecast && ev.forecast.length) {
+          const fc = [ev.now || actual[actual.length - 1]].concat(ev.forecast).filter(Boolean);
+          const white = fc.map(() => new THREE.Color(0xffffff));
+          const rb = ribbon(fc, white, 0.007, RADII.track, 1.1);
+          const ln = thinTrack(fc, white, RADII.track, true);
+          group.add(rb, ln); addLift(rb, LIFT.track); addLift(ln, LIFT.track);
+          ev.ribbons.push(rb); ev.thinLines.push(ln);
+          for (const p of ev.forecast) {
+            const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: hollowTex(), color: new THREE.Color(categoryFor(p.kts).color), depthWrite: false }));
+            pin(s, p.lat, p.lon, trackLift);
+            s.userData.base = 0.026;
+            group.add(s); ev.sprites.push(s);
+          }
+        }
+        for (const p of actual) {
+          if (p === ev.now) continue;
+          const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: dotTex(), color: new THREE.Color(categoryFor(p.kts).color), depthWrite: false }));
+          pin(s, p.lat, p.lon, trackLift);
+          s.userData.base = 0.02;
+          group.add(s); ev.sprites.push(s);
+        }
+        if (ev.current) {
+          const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex(), color, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.8 }));
+          pin(glow, ev.lat, ev.lon, LIFT.marker); glow.userData.base = 0.2; glow.userData.pulse = true;
+          group.add(glow); ev.sprites.push(glow);
+        }
+        const disc = new THREE.Sprite(new THREE.SpriteMaterial({ map: discTex(ev.cat.color), depthWrite: false, opacity: ev.current ? 1 : 0.7 }));
+        pin(disc, ev.lat, ev.lon, LIFT.marker); disc.userData.base = ev.current ? 0.085 : 0.06;
+        group.add(disc); ev.sprites.push(disc);
+        if (ev.current) {
+          const glyph = new THREE.Sprite(new THREE.SpriteMaterial({ map: glyphTex(), depthWrite: false }));
+          pin(glyph, ev.lat, ev.lon, LIFT.marker); glyph.userData.base = 0.07; glyph.userData.spin = ev.lat >= 0 ? 1 : -1;
+          group.add(glyph); ev.sprites.push(glyph);
+        }
+      } else {
+        const base = ev.type === 'EQ' ? 0.032 + clamp(((+ev.severity || 4.5) - 4.5) / 3, 0, 1) * 0.04 : 0.05;
+        if (ev.alert !== 'Green' || (ev.type === 'EQ' && +ev.severity >= 6)) {
+          const ring = new THREE.Sprite(new THREE.SpriteMaterial({ map: ringTex(), color: new THREE.Color(ALERT_COLORS[ev.alert] || '#fff'), transparent: true, depthWrite: false }));
+          pin(ring, ev.lat, ev.lon, LIFT.marker); ring.userData.base = base; ring.userData.ripple = Math.random();
+          group.add(ring); ev.sprites.push(ring);
+        }
+        const b = new THREE.Sprite(new THREE.SpriteMaterial({ map: badgeTex(ev.type, ev.alert), depthWrite: false }));
+        pin(b, ev.lat, ev.lon, LIFT.marker); b.userData.base = base;
+        group.add(b); ev.sprites.push(b);
+      }
+      ev.anchorUnit = latLonToVec(ev.lat, ev.lon, 1);
+      eventsGroup.add(group);
+
+      // Label
+      const major = ev.type === 'TC' || ev.alert !== 'Green' || (ev.type === 'EQ' && +ev.severity >= 6);
+      const label = node('div', 'ev-label' + (major ? '' : ' minor') + (ev.key === state.activeKey ? ' active' : ''));
+      const sw = node('span', 'sw');
+      sw.style.background = ev.type === 'TC' ? ev.cat.color : (ALERT_COLORS[ev.alert] || '#fff');
+      label.append(sw);
+      if (ev.type === 'TC') {
+        label.append(stormName(ev) || ev.title);
+        const kts = ev.now && ev.now.kts != null ? `${Math.round(ev.now.kts)} kt` : '';
+        label.append(node('span', 'k', [catLabel(ev.cat), kts].filter(Boolean).join(' · ') + (ev.current ? '' : ' · ended')));
+      } else if (ev.type === 'EQ') {
+        label.append(`M${(+ev.severity).toFixed(1)}`);
+        label.append(node('span', 'k', ago(ev.from)));
+      } else {
+        label.append(TYPES[ev.type].label.replace(/s$/, ''));
+        label.append(node('span', 'k', ev.country));
+      }
+      label.addEventListener('click', (e) => { e.stopPropagation(); selectEvent(ev); });
+      labelsEl.append(label);
+      ev.label = label;
+      ev.major = major;
+    }
+  }
+
+  // =====================================================================
+  // HUD lists
+  // =====================================================================
+  function renderChips() {
+    const wrap = $('type-chips');
+    wrap.replaceChildren();
+    for (const [type, t] of Object.entries(TYPES)) {
+      const n = state.events.filter((e) => e.type === type).length;
+      const chip = node('button', 'chip');
+      chip.type = 'button';
+      chip.setAttribute('aria-pressed', String(t.on));
+      chip.append(t.icon === '⦿' ? '◎' : t.icon, ' ', t.label, ' ');
+      chip.append(node('span', 'n', String(n)));
+      chip.addEventListener('click', () => {
+        t.on = !t.on;
+        chip.setAttribute('aria-pressed', String(t.on));
+        for (const ev of state.events) if (ev.type === type && ev.group) ev.group.visible = t.on;
+        renderLists();
+      });
+      wrap.append(chip);
+    }
+  }
+
+  function eventRow(ev) {
+    const row = node('button', 'ev-row' + (ev.key === state.activeKey ? ' active' : ''));
+    row.type = 'button';
+    let badge;
+    if (ev.type === 'TC') {
+      badge = node('span', 'badge', ev.cat.short);
+      badge.style.background = ev.cat.color;
+    } else {
+      badge = node('span', 'badge icon', ev.type === 'EQ' ? '◎' : TYPES[ev.type].icon);
+      badge.style.setProperty('--c', ALERT_COLORS[ev.alert] || '#fff');
+    }
+    const t = node('span', 't');
+    t.append(node('b', null, ev.title));
+    let meta;
+    if (ev.type === 'TC') {
+      const when = ev.now && ev.now.time ? ev.now.time : ev.to;
+      meta = (ev.current ? `advisory ${ago(when)}` : `ended ${ago(ev.to)}`) + (ev.country ? ` · ${ev.country}` : '');
+    } else if (ev.type === 'EQ') {
+      meta = `${ago(ev.from)} · ${ev.alert} alert`;
+    } else {
+      meta = `${ev.alert} alert · since ${ago(ev.from).replace(' ago', '')}`;
+    }
+    t.append(node('span', null, meta));
+    let w;
+    if (ev.type === 'TC') {
+      w = node('span', 'w', ev.now && ev.now.kts != null ? `${Math.round(ev.now.kts)} kt` : '—');
+      if (ev.peak && ev.peak.kts > ((ev.now && ev.now.kts) || 0) + 4) w.append(node('small', null, `${ev.current ? 'fcst' : 'peak'} ${Math.round(ev.peak.kts)}`));
+    } else if (ev.type === 'EQ') {
+      w = node('span', 'w', `M${(+ev.severity).toFixed(1)}`);
+    } else {
+      w = node('span', 'w', '');
+    }
+    row.append(badge, t, w);
+    row.addEventListener('click', () => selectEvent(ev));
+    return row;
+  }
+
+  function renderLists() {
+    const tcs = state.events.filter((e) => e.type === 'TC')
+      .sort((a, b) => (b.current - a.current) || (((b.now && b.now.kts) || 0) - ((a.now && a.now.kts) || 0)));
+    const tcList = $('tc-list');
+    tcList.replaceChildren();
+    if (!tcs.length) tcList.append(node('div', 'empty', 'No tropical cyclones right now.'));
+    tcs.forEach((ev) => tcList.append(eventRow(ev)));
+
+    const others = state.events
+      .filter((e) => e.type !== 'TC' && TYPES[e.type].on)
+      .filter((e) => e.alert !== 'Green' || (e.type === 'EQ' && +e.severity >= 5.5))
+      .sort((a, b) => (b.alertScore - a.alertScore) || (b.from - a.from))
+      .slice(0, 8);
+    const al = $('alert-list');
+    al.replaceChildren();
+    if (!others.length) al.append(node('div', 'empty', 'No orange or red alerts, and no M5.5+ quakes in 3 days.'));
+    others.forEach((ev) => al.append(eventRow(ev)));
+  }
+
+  // =====================================================================
+  // Detail card: stats, impact, Wikipedia background, news coverage
+  // =====================================================================
+  function selectEvent(ev) {
+    state.activeKey = ev.key;
+    document.querySelectorAll('.ev-row, .ev-label').forEach((el) => el.classList.remove('active'));
+    if (ev.label) ev.label.classList.add('active');
+    renderLists();
+    flyTo(ev.lat, ev.lon, ev.type === 'TC' ? 1.6 : 1.8);
+    renderDetail(ev);
+    loadExtras(ev);
+  }
+
+  function closeDetail() {
+    state.activeKey = null;
+    detail.hidden = true;
+    document.querySelectorAll('.ev-row, .ev-label').forEach((el) => el.classList.remove('active'));
+  }
+
+  function stat(label, value, small) {
+    const s = node('div', 'stat');
+    s.append(node('div', 'l', label));
+    const v = node('div', 'v', value);
+    if (small) v.append(' ', node('small', null, small));
+    s.append(v);
+    return s;
+  }
+
+  function renderDetail(ev) {
+    detail.hidden = false;
+    detail.replaceChildren();
+
+    const header = node('header');
+    let badge;
+    if (ev.type === 'TC') {
+      badge = node('div', 'big-badge', ev.cat.short);
+      badge.style.background = ev.cat.color;
+    } else {
+      badge = node('div', 'big-badge icon', ev.type === 'EQ' ? '◎' : TYPES[ev.type].icon);
+      badge.style.setProperty('--c', ALERT_COLORS[ev.alert] || '#fff');
+    }
+    const ht = node('div', 'head-txt');
+    ht.append(node('h2', null, ev.title));
+    const sub = node('div', 'sub');
+    const chip = node('span', 'alert-chip', `${ev.alert} alert`);
+    chip.style.background = ALERT_COLORS[ev.alert] || '#ccc';
+    sub.append(chip, ev.countries.length ? ev.countries.join(', ') : (ev.country || 'Open ocean'));
+    ht.append(sub);
+    const near = node('div', 'sub');
+    near.id = 'detail-near';
+    ht.append(near);
+    const close = node('button', 'icon-btn', '✕');
+    close.type = 'button';
+    close.title = 'Close (Esc or fist)';
+    close.addEventListener('click', closeDetail);
+    header.append(badge, ht, close);
+    detail.append(header);
+
+    const stats = node('div', 'stats');
+    if (ev.type === 'TC') {
+      const n = ev.now;
+      stats.append(stat(ev.current ? 'Status' : 'Last status', n ? ev.cat.name : '—'));
+      stats.append(stat(ev.current ? 'Wind now' : 'Last wind', n && n.kts != null ? `${Math.round(n.kts)} kt` : '—', n && n.kts != null ? `${Math.round(n.kts * 1.852)} km/h` : ''));
+      if (n && n.gustKts) stats.append(stat('Gusts', `${Math.round(n.gustKts)} kt`, `${Math.round(n.gustKts * 1.852)} km/h`));
+      if (ev.peak && ev.current) stats.append(stat('Forecast peak', `${Math.round(ev.peak.kts)} kt`, `${catLabel(categoryFor(ev.peak.kts))}${ev.peak.time ? ' · ' + fmtUTC(ev.peak.time) : ''}`));
+      else if (ev.peak) stats.append(stat('Peak', `${Math.round(ev.peak.kts)} kt`, catLabel(categoryFor(ev.peak.kts))));
+      stats.append(stat(ev.current ? 'Last advisory' : 'Ended', ago(ev.current && n && n.time ? n.time : ev.to), fmtUTC(ev.current && n && n.time ? n.time : ev.to)));
+      stats.append(stat('Active since', fmtDay(ev.from)));
+    } else if (ev.type === 'EQ') {
+      const depth = /Depth:\s*([\d.]+)/i.exec(ev.severityText);
+      stats.append(stat('Magnitude', `M${(+ev.severity).toFixed(1)}`));
+      stats.append(stat('Depth', depth ? `${Math.round(+depth[1])} km` : '—', depth && +depth[1] < 70 ? 'shallow' : ''));
+      stats.append(stat('When', ago(ev.from), fmtUTC(ev.from)));
+      stats.append(stat('Alert', ev.alert));
+    } else {
+      stats.append(stat('Started', ago(ev.from), fmtDay(ev.from)));
+      stats.append(stat('Last update', ago(ev.to)));
+      if (ev.type === 'WF') { const ha = /([\d,.]+)\s*ha/.exec(ev.severityText); if (ha) stats.append(stat('Area burned', `${ha[1]} ha`)); }
+    }
+    detail.append(stats);
+
+    // Impact
+    detail.append(node('h3', null, 'Impact'));
+    const impact = node('div');
+    if (ev.type === 'TC' && ev.track && ev.track.length) {
+      const exposedNow = ev.now ? ev.now.pop39 : 0;
+      const maxStorm = Math.max(0, ...ev.track.map((p) => p.pop39));
+      const maxHurr = Math.max(0, ...ev.track.map((p) => p.pop74));
+      const maxSurge = Math.max(0, ...ev.track.map((p) => p.popSurge));
+      const lines = [];
+      if (maxStorm) lines.push(`${fmtInt(maxStorm)} people in tropical-storm-force winds along the ${ev.current ? 'track and forecast' : 'track'}${exposedNow ? ` (${fmtInt(exposedNow)} ${ev.current ? 'right now' : 'at the last advisory'})` : ''}.`);
+      if (maxHurr) lines.push(`${fmtInt(maxHurr)} people in hurricane-force winds.`);
+      if (maxSurge) lines.push(`${fmtInt(maxSurge)} people exposed to storm surge.`);
+      if (!lines.length) lines.push('GDACS estimates no populated land in damaging winds so far.');
+      lines.forEach((l) => impact.append(node('p', null, l)));
+    } else {
+      impact.append(node('p', null, ev.desc.replace(/\s+\.$/, '.')));
+    }
+    impact.append(node('div', 'src', 'Estimate: GDACS'));
+    detail.append(impact);
+
+    // Background (Wikipedia) + news, filled in asynchronously
+    const bg = node('div');
+    bg.id = 'detail-wiki';
+    const news = node('div');
+    news.id = 'detail-news';
+    detail.append(bg, news);
+    renderNear(ev);
+    renderExtras(ev);
+  }
+
+  function renderNear(ev) {
+    const el = $('detail-near');
+    if (!el || state.activeKey !== ev.key) return;
+    const c = ev.ctx;
+    el.textContent = c && c.nearest
+      ? `${ev.type === 'TC' ? 'Closest town to the track' : 'Nearest town'}: ${c.nearest.name}, ${c.nearest.region || c.nearest.country} · ${c.nearest.km} km`
+      : '';
+  }
+
+  function renderExtras(ev) {
+    const bg = $('detail-wiki'), newsEl = $('detail-news');
+    if (!bg || !newsEl || state.activeKey !== ev.key) return;
+    const x = ev.extras || {};
+    bg.replaceChildren();
+    if (x.wiki) {
+      bg.append(node('h3', null, 'Background'));
+      const p = node('p', 'wiki');
+      if (x.wiki.thumb) {
+        const img = new Image();
+        img.className = 'wiki-thumb'; img.alt = ''; img.decoding = 'async'; img.referrerPolicy = 'no-referrer';
+        img.onerror = () => img.remove();
+        img.src = x.wiki.thumb;
+        p.append(img);
+      }
+      p.append(x.wiki.extract);
+      bg.append(p);
+      const s = node('div', 'src', 'From Wikipedia · ');
+      const a = node('a', null, 'read more');
+      a.href = x.wiki.url; a.target = '_blank'; a.rel = 'noopener';
+      s.append(a);
+      bg.append(s);
+    }
+    newsEl.replaceChildren(node('h3', null, 'Local news'));
+    const c = ev.ctx;
+    const placeList = c ? [...c.towns.slice(0, 4), ...c.regions.slice(0, 2)] : [];
+    const placesText = placeList.length ? placeList.join(', ') : (ev.type === 'TC' && stormName(ev) ? stormName(ev) : 'this area');
+    if (!x.newsLoaded) {
+      newsEl.append(node('p', 'skeleton', 'Searching for local coverage…'));
+      return;
+    }
+    if (!x.news || !x.news.length) {
+      newsEl.append(node('p', 'skeleton', x.newsPending
+        ? 'Searching more sources for local coverage…'
+        : 'No local news found for this event yet.'));
+    } else {
+      const ul = node('ul', 'news');
+      for (const n of x.news) ul.append(newsItem(n));
+      newsEl.append(ul);
+      if (x.newsPending) newsEl.append(node('p', 'skeleton', 'Still searching more sources…'));
+    }
+    const searched = (x.searched || ['GDACS media monitor']).join(' and ');
+    newsEl.append(node('div', 'src',
+      `Only headlines that name ${ev.type === 'TC' && stormName(ev) ? 'the storm or ' : ''}places near it (${placesText}) are shown. Searched: ${searched}.`));
+    if (x.apiDown || state.previewDown) {
+      newsEl.append(node('p', 'note', 'Article images and the wider news search need the local server: run "node server.mjs" and open http://localhost:8140.'));
+    }
+  }
+
+  // ---------- News thumbnails: the article's own share image, via /api/preview ----------
+  function newsItem(n) {
+    const li = node('li');
+    const text = node('div');
+    const title = node('a', 'nt', n.title);
+    title.href = n.link; title.target = '_blank'; title.rel = 'noopener';
+    text.append(title, node('div', 'nm', `${n.source} · ${ago(n.date)}`));
+    const thumb = node('a', 'thumb loading');
+    thumb.href = n.link; thumb.target = '_blank'; thumb.rel = 'noopener';
+    thumb.tabIndex = -1;                       // the headline link is the keyboard target
+    thumb.setAttribute('aria-hidden', 'true');
+    li.append(text, thumb);
+    const show = (src, onFail) => {
+      thumb.classList.remove('loading');
+      if (!src) return onFail();
+      const img = new Image();
+      img.alt = ''; img.decoding = 'async'; img.referrerPolicy = 'no-referrer';
+      img.onerror = onFail;
+      img.src = src;
+      thumb.replaceChildren(img);
+    };
+    const viaPreview = () => {
+      thumb.classList.add('loading');
+      loadPreview(n).then((src) => show(src, () => fallbackThumb(thumb, n)));
+    };
+    // GDELT already knows the article's share image; otherwise look it up from the article page
+    if (n.image) show(n.image, viaPreview); else viaPreview();
+    return li;
+  }
+
+  async function apiJSON(path, timeoutMs) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetch(path, { signal: ctrl.signal });
+      if (!res.ok) return { ok: false, status: res.status };
+      return { ok: true, data: await res.json() };
+    } catch (e) {
+      return { ok: false, error: e };
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  function loadPreview(n) {
+    if (!n.previewP) {
+      n.previewP = apiJSON(`/api/preview?url=${encodeURIComponent(n.link)}`, 15000).then((r) => {
+        if (!r.ok && (r.status === 404 || r.error)) state.previewDown = true;
+        return (r.ok && r.data && r.data.image) || null;
+      });
+    }
+    return n.previewP;
+  }
+
+  // No share image: show the outlet's favicon (or its initials) on a colour picked from its name
+  function fallbackThumb(el, n) {
+    let host = '';
+    try { host = new URL(n.link).hostname; } catch (_) { /* keep empty */ }
+    const label = (n.source || host || '?').replace(/^www\./, '');
+    let hash = 0;
+    for (const ch of label) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+    const tile = node('span', 'fallback', label.slice(0, 2).toUpperCase());
+    tile.style.background = `hsl(${hash % 360} 45% 32%)`;
+    if (host) {
+      const fav = new Image();
+      fav.alt = ''; fav.referrerPolicy = 'no-referrer';
+      fav.onload = () => { if (fav.naturalWidth >= 16) tile.replaceChildren(fav); };
+      fav.src = `https://${host}/favicon.ico`;
+    }
+    el.classList.remove('loading');
+    el.replaceChildren(tile);
+  }
+
+  function cleanHeadline(t, link) {
+    let s = String(t || '')
+      .replace(/^\s*(Weather|News)?\s*\d+\s*(hours?|hrs?|mins?|minutes?)\s+ago\s*/i, '')
+      .replace(/\s+/g, ' ')
+      .replace(/(\d) , (\d{3})\b/g, '$1,$2')          // GDELT tokenises "5,753" as "5 , 753"
+      .replace(/\s+([:,;.!?%)])/g, '$1')
+      .replace(/([(])\s+/g, '$1')
+      .trim();
+    // Drop a trailing " - Outlet Name …" when it matches the article's own site
+    let host = '';
+    try { host = new URL(link).hostname.replace(/^www\./, '').split('.')[0]; } catch (_) { /* no link */ }
+    const m = /^(.{25,}?)\s+[-–|]\s+(.+)$/.exec(s);
+    if (m && host.length >= 4) {
+      const tail = norm(m[2]).replace(/[^a-z]/g, '');
+      if (tail.startsWith(host.slice(0, Math.min(8, host.length)))) s = m[1];
+    }
+    return s;
+  }
+
+  // =====================================================================
+  // Local news: find the towns/regions near the event, search GDACS + GDELT,
+  // and keep only headlines that name the event or those places.
+  // =====================================================================
+  const norm = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  function hasTerm(text, term) {
+    const t = norm(term).trim();
+    if (t.length < 3) return false;
+    return new RegExp(`(^|[^a-z0-9])${escRe(t)}([^a-z0-9]|$)`).test(text);
+  }
+
+  const TYPE_WORDS = {
+    WF: ['fire', 'fires', 'bushfire', 'bushfires', 'wildfire', 'wildfires', 'blaze', 'blazes', 'burning', 'firefighters', 'smoke'],
+    FL: ['flood', 'floods', 'flooding', 'flooded', 'floodwaters', 'inundated', 'deluge', 'downpour', 'heavy rain'],
+    EQ: ['earthquake', 'earthquakes', 'quake', 'quakes', 'tremor', 'tremors', 'seismic', 'magnitude', 'aftershock', 'aftershocks'],
+    VO: ['volcano', 'volcanic', 'eruption', 'erupts', 'erupted', 'erupting', 'lava', 'ash'],
+    TC: ['cyclone', 'typhoon', 'hurricane', 'storm', 'tropical', 'depression', 'landfall', 'winds', 'rain', 'rains',
+      'flood', 'floods', 'flooding', 'evacuation', 'evacuated', 'evacuate', 'evacuees'],
+  };
+  const GDELT_TYPES = {
+    WF: 'bushfire OR wildfire OR "forest fire" OR "bush fire" OR blaze',
+    FL: 'flood OR flooding OR floods',
+    EQ: 'earthquake OR quake OR tremor',
+    VO: 'volcano OR eruption OR erupts',
+    TC: 'cyclone OR typhoon OR hurricane OR storm',
+  };
+  const RADIUS_KM = { TC: 220, WF: 300, FL: 200, EQ: 250, VO: 120 };
+
+  let placesP = null;
+  function loadPlacesData() {
+    if (!placesP) {
+      placesP = getJSON('data/places.json', 20000)
+        .then((d) => ({ rows: (d && d.rows) || [] }))
+        .catch(() => ({ rows: [] }));
+    }
+    return placesP;
+  }
+  function kmBetween(lat1, lon1, lat2, lon2) {
+    const c = Math.sin(lat1 * D) * Math.sin(lat2 * D) + Math.cos(lat1 * D) * Math.cos(lat2 * D) * Math.cos((lon2 - lon1) * D);
+    return Math.acos(clamp(c, -1, 1)) * 6371;
+  }
+
+  async function localContext(ev) {
+    if (ev.ctx) return ev.ctx;
+    const { rows } = await loadPlacesData();
+    let pts = [{ lat: ev.lat, lon: ev.lon }];
+    if (ev.type === 'TC' && ev.track && ev.track.length) {
+      pts = ev.track.filter((p) => p.actual || ev.current);   // past track, plus forecast for live storms
+    }
+    // Search a wider ring too, so remote events still get a few reference towns
+    const radius = RADIUS_KM[ev.type] || 200;
+    const outer = radius * 2;
+    const dLat = outer / 111 + 0.1;
+    const best = new Map();
+    for (const p of pts) {
+      for (const r of rows) {
+        if (Math.abs(r[3] - p.lat) > dLat) continue;
+        const km = kmBetween(p.lat, p.lon, r[3], r[4]);
+        if (km > outer) continue;
+        const k = `${r[0]}|${r[1]}|${r[2]}`;
+        const prev = best.get(k);
+        if (!prev || km < prev.km) best.set(k, { r, km });
+      }
+    }
+    const near = [...best.values()].sort((a, b) => a.km - b.km);
+    const inside = near.filter((x) => x.km <= radius);
+    const top = (inside.length >= 4 ? inside : near.slice(0, 4)).slice(0, ev.type === 'TC' ? 12 : 8);
+    const countries = [...new Set([ev.country, ...(ev.countries || []), ...top.map((x) => x.r[2])]
+      .flatMap((c) => String(c || '').split(/,\s*/)).filter(Boolean))];
+    ev.ctx = {
+      towns: [...new Set(top.map((x) => x.r[0]))],
+      regions: [...new Set(top.map((x) => x.r[1]).filter(Boolean))].slice(0, 4),
+      countries,
+      nearest: near[0] ? { name: near[0].r[0], region: near[0].r[1], country: near[0].r[2], km: Math.round(near[0].km) } : null,
+    };
+    return ev.ctx;
+  }
+
+  let foreignCache = null;
+  function countryNames() {
+    if (!foreignCache && state.countries) {
+      foreignCache = [...new Set(state.countries.map((f) => shortName(f.properties.name)).concat(['USA', 'United Kingdom', 'Britain']))];
+    }
+    return foreignCache || [];
+  }
+
+  function isLocal(ev, ctx, n) {
+    const t = norm(n.title);
+    const any = (arr) => arr.some((w) => hasTerm(t, w));
+    const typeOk = any(TYPE_WORDS[ev.type] || []);
+    if (!typeOk) return false;
+    const affected = new Set(ctx.countries.map(norm));
+    const countryOk = any(ctx.countries);
+    const regionOk = any(ctx.regions);
+    // A bare town name (e.g. "Derby") only counts if the region/country is named too,
+    // or the outlet itself is from the affected country
+    const localOutlet = n.srcCountry && affected.has(norm(n.srcCountry));
+    const townOk = ctx.towns.some((w) => hasTerm(t, w)) && (regionOk || countryOk || localOutlet);
+    const placeOk = regionOk || townOk;
+    const foreign = countryNames().some((c) => !affected.has(norm(c)) && hasTerm(t, c));
+
+    if (ev.type === 'TC') {
+      const name = stormName(ev);
+      if (name && hasTerm(t, name)) return !foreign || placeOk || countryOk;
+      return placeOk && !foreign;
+    }
+    if (ev.type === 'EQ' && !placeOk) {
+      // National headlines for a quake are fine if they quote this quake's magnitude
+      const mag = (+ev.severity).toFixed(1);
+      return countryOk && !foreign && t.includes(mag);
+    }
+    return placeOk && !foreign;
+  }
+
+  function gdeltQuery(ev, ctx) {
+    const quote = (s) => {
+      const clean = String(s).replace(/["']/g, ' ').trim();
+      return /[\s-]/.test(clean) ? `"${clean}"` : clean;
+    };
+    const name = ev.type === 'TC' ? stormName(ev) : null;
+    const places = name ? [name] : [...ctx.regions.slice(0, 3), ...ctx.towns.slice(0, 5)];
+    if (!places.length) return null;
+    const placePart = places.length > 1 ? `(${places.map(quote).join(' OR ')})` : quote(places[0]);
+    return `(${GDELT_TYPES[ev.type]}) ${placePart} sourcelang:english`;
+  }
+  function gdeltStart(ev) {
+    const from = Math.max((ev.from ? ev.from.getTime() : Date.now()) - 864e5, Date.now() - 89 * 864e5);
+    return new Date(from).toISOString().replace(/[-:T]/g, '').slice(0, 14);
+  }
+
+  async function loadExtras(ev) {
+    if (ev.extras && ev.extras.newsLoaded) { renderNear(ev); renderExtras(ev); return; }
+    ev.extras = ev.extras || {};
+    const x = ev.extras;
+    renderExtras(ev);
+    findWikipedia(ev).then((w) => { x.wiki = w; renderExtras(ev); }).catch(() => {});
+
+    const ctx = await localContext(ev);
+    renderNear(ev);
+    const newsUrl = ev.urls.media || `${GDACS}/emm/getemmnewsbykey?eventtype=${ev.type}&eventid=${ev.id}`;
+    const q = gdeltQuery(ev, ctx);
+    const gdeltP = q ? apiJSON(`/api/gdelt?q=${encodeURIComponent(q)}&start=${gdeltStart(ev)}`, 90000) : Promise.resolve({ ok: false, skipped: true });
+
+    const candidates = [];
+    const finalize = (pending) => {
+      const since = ev.from ? ev.from.getTime() - 2 * 864e5 : 0;
+      const seen = new Set();
+      x.news = candidates
+        .filter((n) => n.title && n.link && (!n.date || isNaN(n.date) || n.date.getTime() >= since))
+        .filter((n) => isLocal(ev, ctx, n))
+        .filter((n) => {
+          const k = norm(n.title).replace(/[^a-z0-9]+/g, ' ').trim();   // syndicated copies collapse to one
+          if (seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        })
+        .sort((a, b) => (b.date || 0) - (a.date || 0))
+        .slice(0, 6);
+      x.newsPending = pending;
+      x.newsLoaded = true;
+      renderExtras(ev);
     };
 
-    window.addEventListener('resize', () => {
-        camera.aspect = window.innerWidth / window.innerHeight;
-        camera.updateProjectionMatrix();
-        renderer.setSize(window.innerWidth, window.innerHeight);
+    const emm = await getJSON(newsUrl).catch(() => null);
+    for (const n of Array.isArray(emm) ? emm : []) {
+      candidates.push({ title: cleanHeadline(n.title, n.link), source: n.source, link: n.link, date: parseGdacsDate(n.pubdate) });
+    }
+    x.searched = ['GDACS media monitor'];
+    finalize(!!q);
+
+    const gd = await gdeltP;
+    if (gd.ok && gd.data) {
+      for (const a of gd.data.articles || []) {
+        candidates.push({ title: cleanHeadline(a.title, a.url), source: a.domain, link: a.url, date: a.date ? new Date(a.date) : null, image: a.image || null, srcCountry: a.country });
+      }
+      x.searched.push('GDELT news index');
+    } else if (!gd.skipped && (gd.status === 404 || gd.error)) {
+      x.apiDown = true;
+    }
+    finalize(false);
+  }
+
+  // Only accept a Wikipedia article whose title clearly matches the event
+  async function findWikipedia(ev) {
+    const year = (ev.from || new Date()).getUTCFullYear();
+    let q, accept;
+    if (ev.type === 'TC') {
+      const name = stormName(ev);
+      if (!name) return null;
+      q = `${name} ${year} cyclone typhoon hurricane storm`;
+      accept = (t) => new RegExp(`\\b${name}\\b`, 'i').test(t) && /cyclone|typhoon|hurricane|storm|depression/i.test(t) && !/season/i.test(t);
+    } else if (ev.type === 'EQ') {
+      if (+ev.severity < 6) return null;
+      q = `${year} ${ev.country} earthquake`;
+      accept = (t) => /earthquake/i.test(t) && t.includes(String(year)) && ev.country && t.toLowerCase().includes(ev.country.toLowerCase().split(',')[0]);
+    } else if (ev.type === 'FL') {
+      q = `${year} ${ev.country} floods`;
+      accept = (t) => /flood/i.test(t) && t.includes(String(year)) && ev.country && t.toLowerCase().includes(ev.country.toLowerCase().split(',')[0]);
+    } else if (ev.type === 'VO') {
+      const name = (ev.gdacsName || '').replace(/^Volcano\s*/i, '').trim();
+      if (!name) return null;
+      q = `${name} volcano`;
+      accept = (t) => t.toLowerCase().includes(name.toLowerCase());
+    } else {
+      return null;
+    }
+    const s = await getJSON(`https://en.wikipedia.org/w/api.php?action=query&list=search&format=json&origin=*&srlimit=6&srsearch=${encodeURIComponent(q)}`);
+    const hit = s && s.query && s.query.search ? s.query.search.find((r) => accept(r.title)) : null;
+    if (!hit) return null;
+    const sum = await getJSON(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(hit.title.replace(/ /g, '_'))}`);
+    if (!sum || !sum.extract) return null;
+    let extract = sum.extract;
+    if (extract.length > 700) extract = extract.slice(0, 700).replace(/\s+\S*$/, '') + '…';
+    return { title: sum.title, extract, thumb: sum.thumbnail && sum.thumbnail.source, url: (sum.content_urls && sum.content_urls.desktop && sum.content_urls.desktop.page) || `https://en.wikipedia.org/wiki/${encodeURIComponent(hit.title)}` };
+  }
+
+  // =====================================================================
+  // Click-anywhere local weather (Open-Meteo)
+  // =====================================================================
+  const WMO = [
+    [[0], 'Clear', '☀️', '🌙'], [[1], 'Mainly clear', '🌤️', '🌙'], [[2], 'Partly cloudy', '⛅', '☁️'], [[3], 'Overcast', '☁️'],
+    [[45, 48], 'Fog', '🌫️'], [[51, 53, 55, 56, 57], 'Drizzle', '🌦️'], [[61, 63, 65, 66, 67], 'Rain', '🌧️'],
+    [[71, 73, 75, 77], 'Snow', '🌨️'], [[80, 81, 82], 'Showers', '🌦️'], [[85, 86], 'Snow showers', '🌨️'], [[95, 96, 99], 'Thunderstorm', '⛈️'],
+  ];
+  function wmo(code, isDay) {
+    const w = WMO.find(([codes]) => codes.includes(code));
+    if (!w) return { text: 'Unknown', icon: '•' };
+    return { text: w[1], icon: !isDay && w[3] ? w[3] : w[2] };
+  }
+
+  const probeEl = node('div');
+  probeEl.id = 'probe';
+  labelsEl.append(probeEl);
+
+  async function probeWeather(lat, lon) {
+    const place = placeAt(lat, lon);
+    state.probe = { unit: latLonToVec(lat, lon, 1) };
+    probeEl.replaceChildren(node('span', 'dot'));
+    const card = node('div', 'card', 'Checking the weather…');
+    probeEl.append(card);
+    try {
+      const d = await getJSON(`https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(3)}&longitude=${lon.toFixed(3)}&current=temperature_2m,weather_code,wind_speed_10m,precipitation,is_day&wind_speed_unit=kmh`, 12000);
+      const c = d && d.current;
+      if (!c) throw new Error('no data');
+      const w = wmo(c.weather_code, c.is_day);
+      card.replaceChildren(
+        `${w.icon} ${w.text} · ${Math.round(c.temperature_2m)}°C · wind ${Math.round(c.wind_speed_10m)} km/h`,
+        node('span', 'place-name', `${place} · ${Math.abs(lat).toFixed(1)}°${lat >= 0 ? 'N' : 'S'} ${Math.abs(lon).toFixed(1)}°${lon >= 0 ? 'E' : 'W'}`)
+      );
+    } catch (e) {
+      card.textContent = 'Weather unavailable here';
+    }
+  }
+  function placeAt(lat, lon) {
+    if (!state.countries) return 'Ocean';
+    const f = state.countries.find((c) => d3.geoContains(c, [lon, lat]));
+    return f ? shortName(f.properties.name) : 'Ocean';
+  }
+
+  // =====================================================================
+  // Camera moves
+  // =====================================================================
+  function flyTo(lat, lon, scale) {
+    const theta = (lon + 180) * D;
+    const azimuth = Math.atan2(-Math.cos(theta), Math.sin(theta));
+    const cur = globe.rotation.y;
+    flyTarget = { x: clamp(lat * D, -1.2, 1.2), y: cur + wrapPi(-azimuth - cur) };
+    rotationVelocity = 0;
+    grabTarget = null;
+    if (scale) targetScale = Math.max(targetScale, scale);
+  }
+  function stopMotion() {
+    rotationVelocity = 0;
+    flyTarget = null;
+  }
+
+  // =====================================================================
+  // Globe position on screen
+  // =====================================================================
+  const SNAPS = { left: -0.45, center: 0, right: 0.45 };   // fraction of half the view width
+  const POS_KEY = 'earthLive.position';
+
+  function viewHalf() {
+    const halfH = BASE_CAM * Math.tan((camera.fov * D) / 2);       // measured at the zoom-1 camera distance
+    return { halfH, halfW: halfH * camera.aspect };
+  }
+  const pxToWorld = (px) => (px * 2 * viewHalf().halfH) / window.innerHeight;
+
+  // Position stored as fractions of the view, so it survives window resizes
+  function setPosFraction(fx, fy, save = true) {
+    const { halfW, halfH } = viewHalf();
+    const f = { x: clamp(fx, -0.9, 0.9), y: clamp(fy, -0.85, 0.85) };
+    targetPos = { x: f.x * halfW, y: f.y * halfH };
+    state.posFraction = f;
+    const snap = Object.keys(SNAPS).find((k) => Math.abs(SNAPS[k] - f.x) < 0.02 && Math.abs(f.y) < 0.02) || null;
+    document.querySelectorAll('[data-snap]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.snap === snap)));
+    if (save) { try { localStorage.setItem(POS_KEY, JSON.stringify(f)); } catch (_) { /* storage blocked */ } }
+  }
+  function moveBy(dxPx, dyPx, from) {
+    const { halfW, halfH } = viewHalf();
+    const base = from || targetPos;
+    setPosFraction((base.x + pxToWorld(dxPx)) / halfW, (base.y - pxToWorld(dyPx)) / halfH);
+  }
+  function restorePosition() {
+    try {
+      const f = JSON.parse(localStorage.getItem(POS_KEY) || 'null');
+      if (f && isFinite(f.x) && isFinite(f.y)) setPosFraction(f.x, f.y, false);
+    } catch (_) { /* ignore */ }
+  }
+
+  // =====================================================================
+  // Hand tracking: calm, handedness-independent gestures
+  //   pinch + move  → rotate (absolute drag, eased)
+  //   two pinches   → zoom by the distance between hands
+  //   point + hold  → open the event under the cursor
+  //   fist          → stop + close card
+  // =====================================================================
+  function oneEuro(minCutoff, beta) {
+    let x = null, dx = 0, tPrev = 0;
+    const alpha = (cutoff, dt) => 1 / (1 + 1 / (2 * Math.PI * cutoff * dt));
+    return (value, t) => {
+      if (x === null) { x = value; tPrev = t; return x; }
+      const dt = Math.max((t - tPrev) / 1000, 1 / 120);
+      tPrev = t;
+      dx += alpha(1.0, dt) * ((value - x) / dt - dx);
+      x += alpha(minCutoff + beta * Math.abs(dx), dt) * (value - x);
+      return x;
+    };
+  }
+
+  const hands = new Map();            // key: MediaPipe handedness label
+  let grab = null;                    // { key, x0, y0, ry0, rx0, vel, lastY }
+  let zoom = null;                    // { d0, s0 }
+  let dwell = { ev: null, t: 0, done: null };
+  let lastResultsAt = 0;
+
+  // Map MediaPipe's normalised video coords to screen pixels (mirrored, object-fit: cover)
+  function toScreen(p) {
+    const W = window.innerWidth, H = window.innerHeight;
+    const vw = videoElement.videoWidth || 1280, vh = videoElement.videoHeight || 720;
+    const s = Math.max(W / vw, H / vh);
+    return { x: (1 - p.x) * vw * s - (vw * s - W) / 2, y: p.y * vh * s - (vh * s - H) / 2 };
+  }
+
+  function classify(lm) {
+    const vw = videoElement.videoWidth || 1280, vh = videoElement.videoHeight || 720;
+    const P = (i) => ({ x: lm[i].x * vw, y: lm[i].y * vh });
+    const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+    const wrist = P(0);
+    const size = dist(wrist, P(9)) || 1;
+    const folded = (tip, pip) => dist(P(tip), wrist) < dist(P(pip), wrist) * 1.05;
+    const fist = folded(8, 6) && folded(12, 10) && folded(16, 14) && folded(20, 18);
+    return { fist, pinchRatio: dist(P(4), P(8)) / size };
+  }
+
+  function handFor(key) {
+    let h = hands.get(key);
+    if (!h) {
+      const el = node('div', 'hand-cursor');
+      el.append(node('span', 'tag'));
+      cursorsEl.append(el);
+      h = {
+        key, el, state: 'point', candidate: 'point', count: 0, seen: 0,
+        fx: oneEuro(1.4, 0.004), fy: oneEuro(1.4, 0.004),
+        px: oneEuro(1.4, 0.004), py: oneEuro(1.4, 0.004),
+        cursor: { x: 0, y: 0 }, pinch: { x: 0, y: 0 },
+      };
+      hands.set(key, h);
+    }
+    return h;
+  }
+
+  function onResults(results) {
+    const t = performance.now();
+    lastResultsAt = t;
+    const lms = results.multiHandLandmarks || [];
+    const seenKeys = new Set();
+
+    lms.forEach((lm, i) => {
+      const key = (results.multiHandedness && results.multiHandedness[i] && results.multiHandedness[i].label) || 'h' + i;
+      if (seenKeys.has(key)) return;
+      seenKeys.add(key);
+      const h = handFor(key);
+      h.seen = t;
+
+      const tip = toScreen(lm[8]);
+      const mid = toScreen({ x: (lm[4].x + lm[8].x) / 2, y: (lm[4].y + lm[8].y) / 2 });
+      h.cursor = { x: h.fx(tip.x, t), y: h.fy(tip.y, t) };
+      h.pinch = { x: h.px(mid.x, t), y: h.py(mid.y, t) };
+
+      // Gesture classification with hysteresis + debounce
+      const c = classify(lm);
+      // Fingers separating: freeze straight away instead of following the hand while the release registers.
+      // Measured against this pinch's tightest point, so it adapts to how tightly each person pinches.
+      if (h.state === 'pinch') h.pinchMin = Math.min(h.pinchMin == null ? 1 : h.pinchMin, c.pinchRatio);
+      else h.pinchMin = null;
+      h.opening = h.state === 'pinch' && c.pinchRatio > Math.max(0.22, (h.pinchMin == null ? 0 : h.pinchMin) + 0.09);
+      const pinchThresh = h.state === 'pinch' ? 0.55 : 0.36;
+      const raw = c.fist ? 'fist' : (c.pinchRatio < pinchThresh ? 'pinch' : 'point');
+      if (raw === h.state) { h.candidate = raw; h.count = 0; }
+      else {
+        if (raw === h.candidate) h.count++; else { h.candidate = raw; h.count = 1; }
+        const need = raw === 'fist' ? 5 : raw === 'pinch' ? 2 : h.state === 'pinch' ? 4 : 3;
+        if (h.count >= need) {
+          const prev = h.state;
+          h.state = raw;
+          h.count = 0;
+          if (raw === 'fist') { stopMotion(); closeDetail(); }
+          if (prev === 'pinch' && grab && grab.key === h.key) releaseGrab();
+        }
+      }
     });
 
+    // Hands that disappeared: drop them (and any grab) without flinging the globe
+    for (const [key, h] of hands) {
+      if (!seenKeys.has(key) && t - h.seen > 250) {
+        if (grab && grab.key === key) releaseGrab();
+        h.el.remove();
+        hands.delete(key);
+      }
+    }
+    if (lms.length) userInteracted = true;
+    applyGestures(t);
+  }
+
+  // Let go cleanly: no throw/inertia, and the globe settles exactly where it was when the fingers began to open
+  function releaseGrab() {
+    grab = null;
+    rotationVelocity = 0;
+  }
+
+  function applyGestures(t) {
+    const pinched = [...hands.values()].filter((h) => h.state === 'pinch' && t - h.seen < 150);
+    const W = window.innerWidth, H = window.innerHeight;
+
+    if (pinched.length >= 2) {
+      // Two-hand zoom
+      const [a, b] = pinched;
+      const d = Math.hypot(a.pinch.x - b.pinch.x, a.pinch.y - b.pinch.y);
+      if (!zoom) { zoom = { d0: Math.max(d, 40), s0: targetScale }; releaseGrab(); grabTarget = null; }
+      if (a.opening || b.opening) zoom.frozen = true;              // releasing: hold the zoom still
+      else if (zoom.frozen) { zoom = { d0: Math.max(d, 40), s0: targetScale }; }   // re-pinched: carry on without a jump
+      else targetScale = clamp(zoom.s0 * (d / zoom.d0), ZOOM_MIN, ZOOM_MAX);
+    } else {
+      zoom = null;
+      if (pinched.length === 1) {
+        const h = pinched[0];
+        const start = () => {
+          const from = grabTarget || { y: globe.rotation.y, x: globe.rotation.x };
+          grab = { key: h.key, x0: h.pinch.x, y0: h.pinch.y, ry0: from.y, rx0: from.x, frozen: false };
+          grabTarget = { y: from.y, x: from.x };
+        };
+        if (!grab || grab.key !== h.key) { stopMotion(); start(); }
+        if (h.opening) {
+          grab.frozen = true;                    // fingers opening: stop following the hand
+        } else {
+          if (grab.frozen) start();              // pinched again without letting go: re-anchor, no jump
+          const k = 2.6 / (Math.min(W, H) * Math.max(zoomLevel, 0.6));
+          grabTarget = {
+            y: grab.ry0 + (h.pinch.x - grab.x0) * k,
+            x: clamp(grab.rx0 + (h.pinch.y - grab.y0) * k, -1.25, 1.25),
+          };
+        }
+      }
+    }
+
+    // Point and hold to select
+    const pointer = [...hands.values()].find((h) => h.state === 'point');
+    if (pointer && !pinched.length) {
+      const target = nearestEvent(pointer.cursor.x, pointer.cursor.y, 34);
+      if (target && target === dwell.ev) {
+        dwell.t += 33;
+        if (dwell.t >= 1000 && dwell.done !== target) { dwell.done = target; selectEvent(target); }
+      } else {
+        dwell = { ev: target, t: 0, done: target ? dwell.done : null };
+      }
+      if (!target) dwell.done = null;
+    } else {
+      dwell = { ev: null, t: 0, done: null };
+    }
+  }
+
+  function renderCursors() {
+    const stale = performance.now() - lastResultsAt > 400;
+    for (const h of hands.values()) {
+      const p = h.state === 'pinch' ? h.pinch : h.cursor;
+      h.el.style.display = stale ? 'none' : 'block';
+      h.el.style.transform = `translate(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px)`;
+      h.el.className = 'hand-cursor ' + h.state;
+      const isDwell = h.state === 'point' && dwell.ev && dwell.done !== dwell.ev;
+      h.el.style.setProperty('--p', isDwell ? Math.min(dwell.t / 1000, 1).toFixed(3) : 0);
+      const tag = h.el.firstChild;
+      const text = h.state === 'pinch' ? (zoom ? 'Zoom' : 'Rotate')
+        : h.state === 'fist' ? 'Stop'
+        : (isDwell ? 'Hold…' : '');
+      tag.textContent = text;
+      tag.style.display = text ? 'block' : 'none';
+    }
+  }
+
+  const MOUSE_HINT = '<b>Mouse:</b> drag to rotate · Shift-drag or right-drag to move · scroll to zoom · click a storm or anywhere for weather · double-click to reset';
+  const HAND_HINT = '<b>🤏 Pinch + move:</b> rotate · <b>🤏🤏 both hands:</b> zoom · <b>☝️ point &amp; hold:</b> open · <b>✊ fist:</b> stop / close · <b>Shift-drag:</b> move globe';
+  const TASKS_VISION = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+  const HAND_MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+
+  // Hand tracking runs in a background worker (MediaPipe Tasks HandLandmarker), so the globe never waits
+  // for it: the page's own thread only grabs a frame (~0.04 ms) instead of running the model (~18 ms).
+  const handWorkerSource = () => `
+    let lm = null;
+    self.onmessage = async (e) => {
+      const m = e.data;
+      try {
+        if (m.type === 'init') {
+          const vision = await import('${TASKS_VISION}/vision_bundle.mjs');
+          const files = await vision.FilesetResolver.forVisionTasks('${TASKS_VISION}/wasm');
+          const make = (delegate) => vision.HandLandmarker.createFromOptions(files, {
+            baseOptions: { modelAssetPath: '${HAND_MODEL}', delegate },
+            runningMode: 'VIDEO', numHands: 2,
+            minHandDetectionConfidence: 0.7, minHandPresenceConfidence: 0.6, minTrackingConfidence: 0.6,
+          });
+          try { lm = await make('GPU'); } catch (_) { lm = await make('CPU'); }
+          self.postMessage({ type: 'ready' });
+        } else if (m.type === 'frame') {
+          const r = lm.detectForVideo(m.bitmap, m.ts);
+          m.bitmap.close();
+          self.postMessage({ type: 'result', landmarks: r.landmarks, handedness: r.handedness.map((h) => (h[0] && h[0].categoryName) || '') });
+        }
+      } catch (err) {
+        if (m.bitmap && m.bitmap.close) m.bitmap.close();
+        self.postMessage({ type: 'error', error: String((err && err.message) || err) });
+      }
+    };
+  `;
+
+  async function startHands() {
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 360, facingMode: 'user' }, audio: false });
+    } catch (e) {
+      videoElement.style.display = 'none';
+      hint.innerHTML = 'No camera. ' + MOUSE_HINT;
+      return;
+    }
+    videoElement.srcObject = stream;
+    try { await videoElement.play(); } catch (_) { /* autoplay is muted, should be fine */ }
+
+    if (typeof Worker === 'undefined' || typeof createImageBitmap === 'undefined') return startHandsLegacy();
+    let worker;
+    try {
+      worker = new Worker(URL.createObjectURL(new Blob([handWorkerSource()], { type: 'text/javascript' })));
+    } catch (e) {
+      return startHandsLegacy();
+    }
+    let busy = false, lastSent = 0, lastTs = 0, ready = false;
+    const fail = (why) => {
+      console.warn('Hand-tracking worker unavailable, using main-thread tracking:', why);
+      worker.terminate();
+      if (!ready) startHandsLegacy();
+    };
+    worker.onerror = (e) => fail(e.message);
+    worker.onmessage = (e) => {
+      const m = e.data;
+      if (m.type === 'ready') { ready = true; hint.innerHTML = HAND_HINT; pump(); }
+      else if (m.type === 'result') {
+        busy = false;
+        // Same shape as the classic MediaPipe Hands results that onResults() expects
+        onResults({ multiHandLandmarks: m.landmarks, multiHandedness: m.handedness.map((label) => ({ label })) });
+      } else if (m.type === 'error') {
+        busy = false;
+        if (!ready) fail(m.error);
+      }
+    };
+    worker.postMessage({ type: 'init' });
+
+    // Send at most ~20 frames per second, and never queue one while the last is still being processed
+    const pump = async () => {
+      const now = performance.now();
+      if (!busy && now - lastSent >= 50 && videoElement.readyState >= 2) {
+        busy = true;
+        lastSent = now;
+        try {
+          const bitmap = await createImageBitmap(videoElement);
+          lastTs = Math.max(lastTs + 1, Math.round(performance.now()));    // timestamps must increase
+          worker.postMessage({ type: 'frame', bitmap, ts: lastTs }, [bitmap]);
+        } catch (_) {
+          busy = false;
+        }
+      }
+      setTimeout(pump, 16);
+    };
+  }
+
+  // Fallback for browsers without worker support: the classic MediaPipe Hands on the main thread
+  function startHandsLegacy() {
+    try {
+      const mp = new Hands({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${f}` });
+      mp.setOptions({ maxNumHands: 2, modelComplexity: 0, minDetectionConfidence: 0.7, minTrackingConfidence: 0.6 });
+      mp.onResults(onResults);
+      let busy = false, lastSent = 0;
+      const loop = async () => {
+        const now = performance.now();
+        if (!busy && now - lastSent >= 50 && videoElement.readyState >= 2) {
+          busy = true; lastSent = now;
+          try { await mp.send({ image: videoElement }); } catch (_) { /* skip frame */ } finally { busy = false; }
+        }
+        requestAnimationFrame(loop);
+      };
+      hint.innerHTML = HAND_HINT;
+      loop();
+    } catch (e) {
+      console.warn(e);
+      hint.innerHTML = 'Hand tracking unavailable. ' + MOUSE_HINT;
+    }
+  }
+
+  // =====================================================================
+  // Mouse / touch
+  // =====================================================================
+  function nearestEvent(x, y, maxPx) {
+    let best = null, bestD = maxPx;
+    for (const ev of state.events) {
+      if (!ev.screen || !ev.screen.visible || !TYPES[ev.type].on) continue;
+      const d = Math.hypot(ev.screen.x - x, ev.screen.y - y);
+      if (d < bestD) { bestD = d; best = ev; }
+    }
+    return best;
+  }
+
+  function initPointer() {
+    const raycaster = new THREE.Raycaster();
+    let drag = null;
+    stage.addEventListener('contextmenu', (e) => e.preventDefault());   // right-drag moves the globe
+    stage.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('.ev-label')) return;
+      const mode = e.shiftKey || e.button === 2 ? 'move' : 'rotate';
+      drag = { mode, x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, v: 0, moved: false, from: { x: targetPos.x, y: targetPos.y } };
+      stage.setPointerCapture(e.pointerId);
+    });
+    stage.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      if (!drag.moved && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) > 4) {
+        drag.moved = true;
+        stage.classList.add(drag.mode === 'move' ? 'moving' : 'dragging');
+        stopMotion();
+        grabTarget = null;
+        userInteracted = true;
+      }
+      if (!drag.moved) return;
+      if (drag.mode === 'move') { moveBy(e.clientX - drag.sx, e.clientY - drag.sy, drag.from); return; }
+      const k = 2.6 / (Math.min(window.innerWidth, window.innerHeight) * Math.max(zoomLevel, 0.6));
+      const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      drag.x = e.clientX; drag.y = e.clientY;
+      globe.rotation.y += dx * k;
+      globe.rotation.x = clamp(globe.rotation.x + dy * k, -1.25, 1.25);
+      drag.v = drag.v * 0.5 + dx * k * 0.5;
+    });
+    const end = (e) => {
+      if (!drag) return;
+      if (drag.moved) {
+        if (drag.mode === 'rotate') rotationVelocity = clamp(drag.v, -0.04, 0.04);
+      } else if (e.type === 'pointerup' && e.button !== 2) {
+        const ev = nearestEvent(e.clientX, e.clientY, 22);
+        if (ev) selectEvent(ev);
+        else {
+          const ndc = new THREE.Vector2((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
+          raycaster.setFromCamera(ndc, camera);
+          const hit = raycaster.intersectObject(earthMesh, false)[0];
+          if (hit) {
+            const ll = vecToLatLon(globe.worldToLocal(hit.point.clone()));
+            probeWeather(ll.lat, ll.lon);
+          } else {
+            state.probe = null;
+          }
+        }
+      }
+      drag = null;
+      stage.classList.remove('dragging', 'moving');
+    };
+    stage.addEventListener('pointerup', end);
+    stage.addEventListener('pointercancel', end);
+    stage.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      userInteracted = true;
+      targetScale = clamp(targetScale * Math.exp(-e.deltaY * 0.0015), ZOOM_MIN, ZOOM_MAX);
+    }, { passive: false });
+    stage.addEventListener('dblclick', () => {
+      targetScale = 1;
+      setPosFraction(0, 0);
+      flyTarget = { x: 0, y: globe.rotation.y };
+      state.probe = null;
+    });
+    window.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeDetail(); state.probe = null; } });
+  }
+
+  // =====================================================================
+  // HUD wiring
+  // =====================================================================
+  function initHud() {
+    const syncPatches = () => zoomDetail.meshes.forEach((m) => {
+      if (m.userData.layer === 'clouds') m.visible = layers.clouds;
+      if (m.userData.layer === 'rain') m.visible = layers.rain;
+    });
+    $('t-clouds').addEventListener('change', (e) => { layers.clouds = e.target.checked; cloudMesh.visible = layers.clouds && !!cloudMesh.material.map; syncPatches(); });
+    $('t-rain').addEventListener('change', (e) => { layers.rain = e.target.checked; rainMesh.visible = layers.rain && !!rainMesh.material.map; syncPatches(); });
+    $('t-borders').addEventListener('change', (e) => { layers.borders = e.target.checked; bordersGroup.visible = layers.borders; });
+    $('refresh-btn').addEventListener('click', () => { fetchEvents(); loadClouds(); loadRain(); });
+    document.querySelectorAll('[data-snap]').forEach((b) => {
+      b.addEventListener('click', () => setPosFraction(SNAPS[b.dataset.snap], 0));
+    });
+    $('collapse-btn').addEventListener('click', (e) => {
+      const collapsed = hud.classList.toggle('collapsed');
+      e.currentTarget.textContent = collapsed ? '+' : '–';
+      e.currentTarget.setAttribute('aria-expanded', String(!collapsed));
+    });
+    const legend = $('cat-legend');
+    for (const c of CATS) {
+      const item = node('span');
+      const dot = node('i'); dot.style.background = c.color;
+      item.append(dot, catLabel(c));
+      item.title = `${c.name}${isFinite(c.max) ? ` (≤ ${c.max} kt)` : ' (≥ 137 kt)'}`;
+      legend.append(item);
+    }
+  }
+
+  // =====================================================================
+  // Render loop
+  // =====================================================================
+  const tmp = new THREE.Vector3();
+  const center = new THREE.Vector3();
+  const toCam = new THREE.Vector3();
+  const nrm = new THREE.Vector3();
+
+  function project(unit, lift, out) {
+    tmp.copy(unit).multiplyScalar(liftRadius(lift, zoomLevel)).applyMatrix4(globe.matrixWorld);
+    nrm.copy(tmp).sub(center).normalize();
+    toCam.copy(camera.position).sub(tmp).normalize();
+    const facing = nrm.dot(toCam);
+    tmp.project(camera);
+    out.x = (tmp.x + 1) / 2 * window.innerWidth;
+    out.y = (1 - tmp.y) / 2 * window.innerHeight;
+    out.facing = facing;
+    return out;
+  }
+
+  const scratch = {};
+  const viewLocal = new THREE.Vector3();
+  const PLACE_FONT = { continent: [8.6, 16], ocean: [7.6, 15], country: [7.2, 15], province: [7.4, 14], city: [6.9, 15] };
+  const MAX_PLACE_LABELS = 60;                 // fewer moving labels = less repainting every frame
+  const MAX_CITY_LABELS = 22;
+  let shownPlaces = new Set();
+
+  // Greedy label placement: higher-priority labels claim screen space first, later ones that overlap are skipped
+  function overlaps(boxes, b) {
+    for (const o of boxes) if (b.x1 > o.x0 && b.x0 < o.x1 && b.y1 > o.y0 && b.y0 < o.y1) return true;
+    return false;
+  }
+
+  function updateLabels() {
+    const s = zoomLevel;
+    const W = window.innerWidth, H = window.innerHeight;
+    globe.getWorldPosition(center);
+    const occupied = [];
+
+    // Event labels + cached screen positions for picking (drawn on top, so they reserve space first)
+    for (const ev of state.events) {
+      if (!ev.label || !ev.anchorUnit) continue;
+      const on = TYPES[ev.type].on;
+      project(ev.anchorUnit, LIFT.marker, scratch);
+      const onScreen = scratch.x > -50 && scratch.x < W + 50 && scratch.y > -50 && scratch.y < H + 50;
+      ev.screen = { x: scratch.x, y: scratch.y, visible: on && scratch.facing > 0.12 && onScreen };
+      const showLabel = ev.screen.visible && (ev.major || s >= 1.6 || ev.key === state.activeKey);
+      ev.label.style.display = showLabel ? 'block' : 'none';
+      if (showLabel) {
+        ev.label.style.transform = `translate(${scratch.x.toFixed(1)}px, ${scratch.y.toFixed(1)}px)`;
+        const w = ev.labelW || (ev.labelW = ev.label.textContent.length * 7 + 28);
+        occupied.push({ x0: scratch.x - 10, x1: scratch.x + 16 + w, y0: scratch.y - 13, y1: scratch.y + 13 });
+      }
+    }
+
+    // Place labels, culled to the part of the globe in view
+    viewLocal.copy(camera.position);
+    globe.worldToLocal(viewLocal);
+    viewLocal.normalize();
+    const height = Math.max(camera.position.z - center.z - R * globe.scale.x, 1e-4);
+    const visAng = s <= 1.2 ? Math.PI / 2 : Math.min(Math.PI / 2, Math.atan((height * Math.tan(camera.fov * D / 2) * Math.max(camera.aspect, 1) * 1.25) / R));
+    const cosCull = Math.cos(visAng);
+    const shownText = new Set();
+    const nowShown = new Set();
+    let count = 0, cityCount = 0;
+    for (const tier of ['base', 'countries', 'provinces', 'cities']) {
+      for (const p of state.placeTiers[tier]) {
+        if (p.minZoom > s) break;                       // tiers are sorted by the zoom they appear at
+        let want = false;
+        if (tier === 'cities' && cityCount >= MAX_CITY_LABELS) break;
+        if (layers.borders && count < MAX_PLACE_LABELS && p.minZoom <= s && s < p.maxZoom && p.unit.dot(viewLocal) > cosCull) {
+          project(p.unit, LIFT.label, scratch);
+          want = scratch.facing > 0.3 && scratch.x > -40 && scratch.x < W + 40 && scratch.y > -20 && scratch.y < H + 20;
+          if (want && p.kind === 'ocean') want = !shownText.has(p.text);      // oceans have two anchors
+          if (want) {
+            const [cw, h] = PLACE_FONT[p.kind];
+            const w = p.text.length * cw * (p.big ? 1.1 : 1) + (p.kind === 'city' ? 14 : 6);
+            const box = p.kind === 'city'
+              ? { x0: scratch.x - 6, x1: scratch.x - 6 + w, y0: scratch.y - h / 2, y1: scratch.y + h / 2 }
+              : { x0: scratch.x - w / 2, x1: scratch.x + w / 2, y0: scratch.y - h / 2, y1: scratch.y + h / 2 };
+            want = !overlaps(occupied, box);
+            if (want) {
+              occupied.push(box);
+              shownText.add(p.text);
+              count++;
+              if (p.kind === 'city') cityCount++;
+              if (!p.el) {
+                p.el = node('div', `place ${p.kind}${p.big ? ' big' : ''}`);
+                p.el.append(node('span', null, p.text));
+                labelsEl.append(p.el);
+              }
+              if (Math.abs(scratch.x - (p.lx || 0)) > 0.4 || Math.abs(scratch.y - (p.ly || 0)) > 0.4) {
+                p.el.style.transform = `translate(${scratch.x.toFixed(1)}px, ${scratch.y.toFixed(1)}px)`;
+                p.lx = scratch.x; p.ly = scratch.y;
+              }
+              const op = smooth(0.3, 0.5, scratch.facing);
+              if (Math.abs(op - (p.op || 0)) > 0.05) { p.el.style.opacity = op.toFixed(2); p.op = op; }
+              if (!p.shown) { p.el.style.display = 'block'; p.shown = true; }
+              nowShown.add(p);
+            }
+          }
+        }
+      }
+    }
+    for (const p of shownPlaces) if (!nowShown.has(p)) { p.el.style.display = 'none'; p.shown = false; }
+    shownPlaces = nowShown;
+
+    // Weather probe
+    if (state.probe) {
+      project(state.probe.unit, LIFT.label, scratch);
+      const vis = scratch.facing > 0.1;
+      probeEl.style.display = vis ? 'block' : 'none';
+      if (vis) probeEl.style.transform = `translate(${scratch.x.toFixed(1)}px, ${scratch.y.toFixed(1)}px)`;
+    } else {
+      probeEl.style.display = 'none';
+    }
+  }
+
+  let lastFrame = 0;
+  function animate(t) {
+    requestAnimationFrame(animate);
+    const tStart = performance.now();
+    // Time-based easing so motion feels the same at 30, 60 or 120 fps (dt in 60-fps frames)
+    const dt = lastFrame && t ? clamp((t - lastFrame) / 16.67, 0.25, 6) : 1;
+    lastFrame = t || 0;
+    const ease = (k) => 1 - Math.pow(1 - k, dt);
+
+    globe.position.x += (targetPos.x - globe.position.x) * ease(0.25);
+    globe.position.y += (targetPos.y - globe.position.y) * ease(0.25);
+    // Ease zoom in log space so each scroll step feels the same at 1× and at 50×
+    const sc = Math.exp(Math.log(zoomLevel) + (Math.log(targetScale) - Math.log(zoomLevel)) * ease(0.12));
+    applyZoom(sc);
+    updateLineDetail(sc);
+
+    if (grabTarget) {
+      globe.rotation.y += (grabTarget.y - globe.rotation.y) * ease(0.35);
+      globe.rotation.x += (grabTarget.x - globe.rotation.x) * ease(0.35);
+      // After letting go, finish settling on the last target, then stop completely
+      if (!grab && Math.abs(grabTarget.y - globe.rotation.y) < 0.0005 && Math.abs(grabTarget.x - globe.rotation.x) < 0.0005) grabTarget = null;
+    } else if (flyTarget) {
+      globe.rotation.y += (flyTarget.y - globe.rotation.y) * ease(0.07);
+      globe.rotation.x += (flyTarget.x - globe.rotation.x) * ease(0.07);
+      if (Math.abs(flyTarget.y - globe.rotation.y) < 0.002 && Math.abs(flyTarget.x - globe.rotation.x) < 0.002) flyTarget = null;
+    } else if (Math.abs(rotationVelocity) > 0.00005) {
+      globe.rotation.y += rotationVelocity * dt;
+      rotationVelocity *= Math.pow(friction, dt);
+    }
+
+    // Markers grow only gently as you zoom (on-screen size ∝ zoom^0.25); storms spin, alerts ripple.
+    // Below 1× the globe itself shrinks; above 1× the camera moves closer, so world size must shrink.
+    const time = (t || 0) / 1000;
+    const k = sc <= 1 ? 1 / Math.sqrt(sc) : Math.pow(sc, -0.75);
+    const deep = sc >= 4;
+    for (const ev of state.events) {
+      if (!ev.sprites || (ev.group && !ev.group.visible)) continue;
+      if (ev.ribbons) ev.ribbons.forEach((m) => { m.visible = !deep; });
+      if (ev.thinLines) ev.thinLines.forEach((m) => { m.visible = deep; });
+      for (const sp of ev.sprites) {
+        if (sp.userData.unit) sp.position.copy(sp.userData.unit).multiplyScalar(liftRadius(sp.userData.lift, sc));
+        let size = sp.userData.base * k;
+        if (sp.userData.spin) sp.material.rotation += 0.03 * sp.userData.spin * dt;
+        if (sp.userData.pulse) size *= 1 + Math.sin(time * 2.4 + ev.lon) * 0.12;
+        if (sp.userData.ripple != null) {
+          const ph = (time * 0.6 + sp.userData.ripple) % 1;
+          size *= 1 + ph * 1.6;
+          sp.material.opacity = 1 - ph;
+        }
+        sp.scale.set(size, size, 1);
+      }
+    }
+
+    const t0 = performance.now();
+    renderer.render(scene, camera);
+    const t1 = performance.now();
+    updateLabels();
+    const t2 = performance.now();
+    renderCursors();
+    updateDetail(t || 0);
+    if (perf) {
+      perf.frames++;
+      perf.render += t1 - t0;
+      perf.labels += t2 - t1;
+      perf.total += performance.now() - tStart;
+    }
+  }
+  // Frame-time counters, only collected with ?debug
+  const perf = /[?&]debug\b/.test(location.search) ? { frames: 0, render: 0, labels: 0, total: 0 } : null;
+
+  // =====================================================================
+  // Boot
+  // =====================================================================
+  window.addEventListener('load', () => {
+    initThree();
+    initHud();
+    initPointer();
+    restorePosition();
+    globe.position.set(targetPos.x, targetPos.y, 0);
+    animate();
+    startHands();
+
+    loadBaseMap();
+    loadBorders();
+    loadClouds();
+    loadRain();
+    fetchEvents();
+
+    // Dev hook: open with ?debug to inspect events and open them from the console
+    if (/[?&]debug\b/.test(location.search)) {
+      window.__earth = {
+        startHands, onResults, rot: () => ({ y: globe.rotation.y, x: globe.rotation.x, grabbing: !!grab, settling: !!grabTarget }),
+        state, selectEvent, flyTo, zoomTo: (z) => { targetScale = clamp(z, ZOOM_MIN, ZOOM_MAX); }, zoom: () => zoomLevel, detail: zoomDetail,
+        spin: (v) => { rotationVelocity = v; friction = 1; },
+        perf: () => {
+          const f = Math.max(perf.frames, 1);
+          const out = { frames: perf.frames, renderMs: +(perf.render / f).toFixed(2), labelsMs: +(perf.labels / f).toFixed(2), frameJsMs: +(perf.total / f).toFixed(2) };
+          perf.frames = perf.render = perf.labels = perf.total = 0;
+          return out;
+        },
+      };
+      // Long main-thread stalls (e.g. image processing) show up here
+      window.__longTasks = [];
+      try { new PerformanceObserver((l) => l.getEntries().forEach((e) => window.__longTasks.push(Math.round(e.duration)))).observe({ type: 'longtask' }); } catch (_) { /* unsupported */ }
+    }
+
+    setInterval(fetchEvents, REFRESH.events);
+    setInterval(loadClouds, REFRESH.clouds);
+    setInterval(loadRain, REFRESH.rain);
+    setInterval(() => { updateEventsStatus(); if (state.events.length) renderLists(); }, 60e3);
+  });
+
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    if (state.posFraction) setPosFraction(state.posFraction.x, state.posFraction.y, false);
+  });
+})();
 </script>
 </body>
 </html>

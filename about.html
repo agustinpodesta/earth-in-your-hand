@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>About · Earth in Your Hand</title>
+<meta name="description" content="A live disaster and weather globe you control with your hands. Built by @maangostin.">
+<style>
+  :root {
+    --bg: #04070d;
+    --card: rgba(15, 21, 32, 0.78);
+    --line: rgba(255, 255, 255, 0.12);
+    --text: #eef2f7;
+    --muted: #97a3b6;
+    --accent: #5ab0ff;
+    --live: #ff4d4d;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); }
+  body {
+    margin: 0; min-height: 100vh; color: var(--text);
+    background:
+      radial-gradient(ellipse 90% 60% at 50% -10%, #12284a 0%, transparent 70%),
+      radial-gradient(ellipse at 50% 45%, #0b1626 0%, var(--bg) 70%);
+    font: 17px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  /* A few faint stars, drawn with gradients so there's nothing to download. */
+  body::before {
+    content: ""; position: fixed; inset: 0; pointer-events: none; opacity: .55;
+    background-image:
+      radial-gradient(1px 1px at 12% 18%, #fff 50%, transparent 51%),
+      radial-gradient(1px 1px at 78% 12%, #fff 50%, transparent 51%),
+      radial-gradient(1.5px 1.5px at 64% 32%, #cfe3ff 50%, transparent 51%),
+      radial-gradient(1px 1px at 30% 64%, #fff 50%, transparent 51%),
+      radial-gradient(1px 1px at 88% 58%, #fff 50%, transparent 51%),
+      radial-gradient(1.5px 1.5px at 8% 86%, #cfe3ff 50%, transparent 51%),
+      radial-gradient(1px 1px at 52% 90%, #fff 50%, transparent 51%),
+      radial-gradient(1px 1px at 40% 8%, #fff 50%, transparent 51%);
+  }
+  main { position: relative; max-width: 720px; margin: 0 auto; padding: 20px 20px 48px; }
+  a { color: var(--accent); }
+  .back {
+    display: inline-flex; align-items: center; min-height: 44px;
+    color: var(--muted); text-decoration: none; font-size: 15px;
+  }
+  .back:hover { color: var(--text); }
+  h1 { margin: 22px 0 18px; font-size: clamp(34px, 9vw, 46px); line-height: 1.05; letter-spacing: -0.02em; }
+  h2 { margin: 0 0 20px; font-size: 26px; line-height: 1.15; letter-spacing: -0.01em; }
+  p { margin: 0 0 12px; }
+  .links { list-style: none; padding: 0; margin: 20px 0 0; }
+  .links a { display: inline-flex; align-items: center; min-height: 44px; font-weight: 600; text-decoration: none; }
+  .links a:hover { text-decoration: underline; }
+  hr { border: 0; border-top: 1px solid var(--line); margin: 40px 0; }
+
+  /* ---------- Inspiration cards ---------- */
+  .inspo { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+  .card {
+    margin: 0; overflow: hidden; border-radius: 14px;
+    background: var(--card); border: 1px solid var(--line);
+    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  }
+  .card svg { display: block; width: 100%; height: auto; aspect-ratio: 3 / 2; }
+  /* Zoom Earth's own logo and name, as their app shows it. */
+  .brand-art {
+    display: flex; align-items: center; justify-content: center; gap: 12px;
+    aspect-ratio: 3 / 2; background: #161b22;
+  }
+  .brand-art img { width: 30%; height: auto; border-radius: 50%; box-shadow: 0 0 0 3px #0c0f14; }
+  .brand-art .wordmark { display: flex; flex-direction: column; color: #fff; font-size: clamp(20px, 6.2vw, 30px); line-height: 1.02; letter-spacing: .02em; font-weight: 300; }
+  .brand-art .wordmark b { font-weight: 800; }
+  @media (min-width: 641px) { .brand-art .wordmark { font-size: 19px; } }
+  .card figcaption { padding: 12px 14px 15px; font-size: 14.5px; line-height: 1.5; }
+  .card b { display: block; margin-bottom: 4px; font-size: 15px; }
+  .card b a { color: var(--text); text-decoration-color: rgba(255,255,255,.35); text-underline-offset: 3px; }
+  .card b a:hover { color: var(--accent); }
+  .card span { color: var(--muted); }
+  .story p { margin-bottom: 18px; }
+
+  footer {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px;
+    margin-top: 44px; padding-top: 22px; border-top: 1px solid var(--line);
+    color: var(--muted); font-size: 14px;
+  }
+  .cta {
+    display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 18px;
+    border-radius: 22px; background: var(--accent); color: #06101d;
+    font-weight: 700; text-decoration: none;
+  }
+  .cta:hover { background: #7cc1ff; }
+  .cta .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--live); box-shadow: 0 0 0 3px rgba(255,77,77,.25); }
+
+  @media (max-width: 640px) {
+    body { font-size: 16px; }
+    main { padding: 12px 16px 40px; }
+    .inspo { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <a class="back" href="/">← Back to the globe</a>
+
+  <section>
+    <h1>About</h1>
+    <p>Hi, I'm Agustin.</p>
+    <p>I'm an environmental engineer experimenting with creative tech, building small, useful things.</p>
+    <p>I share how I build this and my other projects on Instagram.</p>
+    <ul class="links">
+      <li><a href="https://instagram.com/maangostin" target="_blank" rel="noopener noreferrer">→ Instagram @maangostin</a></li>
+    </ul>
+  </section>
+
+  <hr>
+
+  <section>
+    <h2>The inspiration</h2>
+    <div class="inspo">
+
+      <figure class="card">
+        <svg id="hand-art" viewBox="0 0 240 160" role="img" aria-label="Drawing of a hand traced by 21 tracking points connected by lines">
+          <defs>
+            <radialGradient id="g-hand" cx="50%" cy="45%" r="75%">
+              <stop offset="0" stop-color="#16304f"/><stop offset="1" stop-color="#070c15"/>
+            </radialGradient>
+          </defs>
+          <rect width="240" height="160" fill="url(#g-hand)"/>
+          <g id="hand-bones" stroke="#5ab0ff" stroke-width="2.2" stroke-linecap="round" opacity=".85"></g>
+          <g id="hand-joints" fill="#fff"></g>
+        </svg>
+        <figcaption>
+          <b><a href="https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker" target="_blank" rel="noopener noreferrer">Computer vision · Google MediaPipe</a></b>
+          <span>Free hand tracking that runs in any browser. A webcam is enough to follow 21 points on each hand.</span>
+        </figcaption>
+      </figure>
+
+      <figure class="card">
+        <div class="brand-art">
+          <img src="/about-img/zoom-earth-icon.jpg" alt="" width="400" height="400" loading="lazy" decoding="async">
+          <span class="wordmark" aria-label="Zoom Earth"><b>ZOOM</b>EARTH</span>
+        </div>
+        <figcaption>
+          <b><a href="https://zoom.earth/" target="_blank" rel="noopener noreferrer">Zoom Earth</a></b>
+          <span>Live satellite weather, storms, fires and other natural disasters for the whole planet, open to anyone.</span>
+        </figcaption>
+      </figure>
+
+      <figure class="card">
+        <svg viewBox="0 0 240 160" role="img" aria-label="Drawing of a small globe held between a pinching thumb and finger">
+          <defs>
+            <radialGradient id="g-small" cx="38%" cy="34%" r="70%">
+              <stop offset="0" stop-color="#3a86bf"/><stop offset="1" stop-color="#0d2c47"/>
+            </radialGradient>
+          </defs>
+          <rect width="240" height="160" fill="#060b13"/>
+          <circle cx="120" cy="76" r="38" fill="url(#g-small)"/>
+          <g fill="none" stroke="#fff" stroke-width=".7" opacity=".25">
+            <ellipse cx="120" cy="76" rx="15" ry="38"/><ellipse cx="120" cy="76" rx="30" ry="38"/><path d="M82 76h76"/>
+          </g>
+          <circle cx="146" cy="104" r="13" fill="rgba(90,176,255,.45)" stroke="#5ab0ff" stroke-width="2.5"/>
+          <g stroke="#5ab0ff" stroke-width="2.2" stroke-linecap="round" fill="none" opacity=".85">
+            <path d="M200 150l-22-18-16-14-10-8"/>
+            <path d="M210 128l-24-6-18-6-14-8"/>
+          </g>
+          <g fill="#fff"><circle cx="200" cy="150" r="3"/><circle cx="178" cy="132" r="3"/><circle cx="162" cy="118" r="3"/><circle cx="152" cy="110" r="3"/>
+            <circle cx="210" cy="128" r="3"/><circle cx="186" cy="122" r="3"/><circle cx="168" cy="116" r="3"/><circle cx="154" cy="108" r="3"/></g>
+        </svg>
+        <figcaption>
+          <b><a href="https://github.com/n07eo/Earth-in-Your-Hand" target="_blank" rel="noopener noreferrer">Earth in Your Hand · n07eo</a></b>
+          <span>The open-source hand-controlled globe this project grew from.</span>
+        </figcaption>
+      </figure>
+
+    </div>
+  </section>
+
+  <hr>
+
+  <section class="story">
+    <h2>Why I built this</h2>
+    <p>I've always been fascinated by watching natural disasters happen in real life using apps like Zoom Earth.</p>
+    <p>I thought, why not make the experience a little more fun? Computer vision has been going on for a while now, but it always felt like something only developers got to experiment with.</p>
+    <p>These days all you need is an AI agent, a webcam, and a browser to track your hands, so pretty much anyone who's into our planet can build something with it.</p>
+    <p>You can grab the Earth, spin it, zoom in with both hands, and point at a storm to see what's going on down there: how many people it's expected to affect, its forecasted location, and the local news around it.</p>
+    <p>Hope you have as much fun using it as I had making it.</p>
+  </section>
+
+  <footer>
+    <a class="cta" href="/"><span class="dot" aria-hidden="true"></span>Open the live globe</a>
+    <span>Earth in Your Hand · built by <a href="https://instagram.com/maangostin" target="_blank" rel="noopener noreferrer">@maangostin</a></span>
+  </footer>
+</main>
+
+<script>
+  // The hand drawing uses MediaPipe's own 21-point layout and the lines it draws between them.
+  (function () {
+    const P = [[120,148],[96,136],[78,118],[66,100],[56,84],[100,92],[94,66],[90,48],[87,32],[118,88],[117,58],[116,38],[115,20],
+               [135,92],[139,64],[142,46],[144,31],[150,100],[160,80],[166,66],[171,53]];
+    const E = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[0,17],[17,18],[18,19],[19,20]];
+    const ns = 'http://www.w3.org/2000/svg';
+    const bones = document.getElementById('hand-bones'), joints = document.getElementById('hand-joints');
+    for (const [a, b] of E) {
+      const l = document.createElementNS(ns, 'line');
+      l.setAttribute('x1', P[a][0]); l.setAttribute('y1', P[a][1]); l.setAttribute('x2', P[b][0]); l.setAttribute('y2', P[b][1]);
+      bones.appendChild(l);
+    }
+    P.forEach(([x, y], i) => {
+      const c = document.createElementNS(ns, 'circle');
+      c.setAttribute('cx', x); c.setAttribute('cy', y); c.setAttribute('r', [4, 8, 12, 16, 20].includes(i) ? 3.6 : 2.8);
+      joints.appendChild(c);
+    });
+  })();
+</script>
+</body>
+</html>

@@ -1,60 +1,58 @@
-# 🌍 Earth in Your Hand
+# Earth in Your Hand · Live Weather
 
-A hand-tracking WebGL experiment by Hamaidia Abd el wadoud: control a spinning, zoomable 3D globe using nothing but your webcam and your hands.
+**Try it:** https://earth-in-your-hand.vercel.app (Chrome, allow the camera)
 
-Right hand — point your index finger to move the globe around the screen. Make a fist to freeze its spin.
-Left hand — push forward to spin the globe. Pinch your thumb and index finger together (with your other three fingers folded) to zoom in and out.
+A hand-gesture globe with live clouds, rain, tropical cyclones and other disasters. It's based on
+[Earth in Your Hand](https://github.com/n07eo/Earth-in-Your-Hand) by n07eo.
 
-No mouse, no keyboard, no controllers — just you and your camera.
-
-## Preview
-
-<img width="1537" height="1023" alt="ChatGPT Image 26 juil  2026, 20_34_15" src="https://github.com/user-attachments/assets/62b7f687-7b92-4be0-99f0-73dfd0956b6f" />
-
-## Demo
-
-Open index.html in a browser (see Running locally below) and grant camera access when prompted.
-
-## How it works
-MediaPipe Hands tracks 21 landmarks per hand in real time from the webcam feed.
-Three.js renders a textured, cloud-layered Earth sphere.
-Simple physics (easing + friction) smooth out the raw hand-tracking data so the globe moves and spins naturally instead of jittering.
-
-All the logic lives in a single self-contained index.html — no build step, no dependencies to install.
-
-## Running locally
-
-Because the page requests webcam access, most browsers require it to be served over http:// or https:// rather than opened directly via file://. Any simple local server works:
+## Run it
 
 ```bash
-# Python
-python3 -m http.server 8000
-
-# Node
-npx serve .
+node server.mjs
 ```
 
-Then visit http://localhost:8000 (or whatever port your tool prints) and allow camera access when prompted.
+Then open http://localhost:8140 in Chrome and allow camera access. Node 18+ is required, and there's nothing to install.
 
-## Requirements
-- A webcam
-- A modern browser with WebGL and getUserMedia support (recent Chrome, Firefox, Edge, or Safari)
-- Reasonable, even lighting so your hands can be tracked reliably
+The server hosts the page plus two small endpoints:
 
-## Tech stack
+- `/api/preview?url=…` looks up a news article's own share image (`og:image`) for the thumbnails in the details card.
+- `/api/gdelt?q=…` searches the GDELT news index for local coverage. GDELT allows one request every 5 seconds,
+  so the endpoint queues requests and caches results for 30 minutes.
 
-| Library | Purpose |
-|---------|---------|
-| MediaPipe Hands | Hand landmark detection |
-| MediaPipe Camera Utils | Webcam frame capture helper |
-| Three.js r128 | 3D rendering |
+Local news only shows headlines that name the storm, or a town or region near the event. The towns come from
+`data/places.json`, which is Natural Earth's populated places reduced to name, region, country and coordinates.
+If you open `index.html` without the server, the page still works but only searches GDACS, and headlines show the
+outlet's logo instead of the article photo.
 
-All three are loaded from public CDNs, so there's nothing to npm install.
+## Zooming in
 
-## Privacy
+Scroll (or pinch with both hands) to zoom from the whole globe down to about 60×.
 
-All hand tracking runs entirely in your browser. Your webcam feed is never uploaded or sent anywhere — it's processed locally by MediaPipe and immediately discarded.
+- **Sharper imagery:** past 3×, once the view settles for half a second, the page fetches sharper relief, live clouds and
+  rain for just the area in view from NASA GIBS. It lays these over the globe, like a map loading higher-zoom tiles.
+- **More detail as you go:** province/state borders and names, and then the larger cities, appear progressively.
+  Labels never overlap; more important names win the space.
+- **Kept light on purpose:** at most 60 labels (22 cities) show at once, towns under 50,000 people only appear when
+  you're very close, and coastlines stay at 1:50m. The 1:10m set was about 950k line points and made rotation lag
+  alongside webcam hand tracking.
+- **Data files:** `data/admin1-lines.json` and `data/admin1-labels.json` are Natural Earth 1:10m provinces/states,
+  simplified to about 3 km. `data/places.json` holds the cities and towns.
 
-## Author
+## Deploy (free)
 
-Made by Hamaidia Abd el wadoud.
+The folder deploys to Vercel as is. `index.html` is served statically and `api/preview.js` runs as a serverless function.
+
+## Data (all free, no keys)
+
+- **Disasters, cyclone tracks and forecasts, exposure estimates, news headlines:** GDACS
+- **Live clouds (GOES-East/West, Himawari IR), daily NOAA-20 imagery, GPM IMERG rain, Blue Marble base map:** NASA GIBS
+- **Borders:** Natural Earth via world-atlas
+- **Click-for-weather:** Open-Meteo
+- **Storm background:** Wikipedia
+- **Local news:** GDACS / Europe Media Monitor and the GDELT news index; nearby towns from Natural Earth
+
+This isn't an official warning source.
+
+## License
+
+The original Earth in Your Hand is by n07eo and has no license. My additions are MIT. See `LICENSE`.
